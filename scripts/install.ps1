@@ -16,7 +16,11 @@ $localPrograms = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')
 $installDirectory = Join-Path $localPrograms 'CodexLimitReminder'
 $installedExecutable = Join-Path $installDirectory 'CodexLimitReminder.exe'
 
-Get-Process -Name 'CodexLimitReminder' -ErrorAction SilentlyContinue | Stop-Process -Force
+$running = Get-Process -Name 'CodexLimitReminder' -ErrorAction SilentlyContinue
+if ($running) {
+    $running | Stop-Process -Force
+    $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+}
 New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
 Copy-Item -LiteralPath $source -Destination $installedExecutable -Force
 

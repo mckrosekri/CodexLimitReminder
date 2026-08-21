@@ -1,27 +1,28 @@
 namespace CodexLimitReminder;
 
 public sealed record AppSettings(
-    DayOfWeek ResetDay,
-    TimeSpan ResetTime,
     TimeSpan ReminderTime,
-    bool StartWithWindows,
     bool IsConfigured,
-    string LastReminderKey)
+    string LastReminderKey,
+    long LastKnownResetUnixSeconds,
+    double? LastKnownUsedPercent,
+    string? LastKnownPlanType)
 {
     public static AppSettings Default => new(
-        DayOfWeek.Monday,
-        TimeSpan.Zero,
         TimeSpan.FromHours(9),
-        true,
         false,
-        string.Empty);
+        string.Empty,
+        0,
+        null,
+        null);
 }
 
 public sealed record ReminderOccurrence(
     DateTime DueLocal,
     DateTime ResetLocal,
+    long ResetUnixSeconds,
     int CycleDay,
     int DaysBeforeReset)
 {
-    public string Key => $"{ResetLocal:yyyyMMddHHmm}:{DaysBeforeReset}";
+    public string Key => $"{ResetUnixSeconds}:{DaysBeforeReset}";
 }

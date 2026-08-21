@@ -5,9 +5,11 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 - Normally visible only as a system-tray icon; no background taskbar window.
 - Full-screen, topmost reminder with a keyboard-accessible **Close reminder** button.
 - Two alerts per cycle: day 6 (two calendar days before reset) and day 7 (one calendar day before reset).
-- One blocked native message loop and one one-shot timer: no polling and no background network traffic.
-- Single 1.23 MB x64 executable in the initial release.
-- Stores settings only in the current user's Windows registry.
+- Reads the exact weekly reset and current usage from your signed-in local Codex installation.
+- Only one setup choice: the morning notification time.
+- Refreshes hourly, retries automatically after connection problems, and keeps the last known reset offline.
+- Native single-file x64 executable with no installer framework or runtime bundle.
+- Stores only the notification time, reminder deduplication key, and last Codex status in the current user's registry.
 
 ## Install
 
@@ -19,16 +21,15 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 
 The installer copies the app to `%LOCALAPPDATA%\Programs\CodexLimitReminder`, creates a current-user startup entry, and opens the settings window. The startup target is the GUI-subsystem executable itself, so Windows does not flash a console.
 
-You can also run `CodexLimitReminder.exe` directly without installing it. Settings can enable or disable quiet startup with Windows.
+You can also run `CodexLimitReminder.exe` directly without installing it. The installer enables quiet startup with Windows; saving from a portable copy does the same.
 
-## Configure the weekly reset
+## One-time setup
 
-1. In Codex, open **Settings → Usage** and note the weekly reset day and local time shown for your account.
+1. Make sure the Codex CLI is installed and signed in.
 2. Open **Codex Limit Reminder settings** from the tray icon.
-3. Enter that weekly reset day/time and your preferred morning alert time.
-4. Select **Save**.
+3. Choose your preferred notification time and select **Save time**.
 
-The app repeats the configured reset every seven days. If Codex changes your reset time, update it in the tray settings.
+That is the entire setup. The app launches Codex's local App Server without a console window and reads `account/rateLimits/read`. It selects the main `codex` seven-day window, including the exact reset timestamp and current usage percentage. It never guesses a future reset by adding seven days; after a reset it waits for Codex to expose the next exact cycle.
 
 The schedule is date-based:
 
@@ -42,12 +43,14 @@ Each reminder is recorded before it appears, so restarting the app cannot duplic
 ## Tray controls
 
 - Left-click the tray icon to open settings.
-- Right-click for **Settings**, **Test day 6 reminder**, **Test day 7 reminder**, or **Exit**.
+- Right-click for **Settings**, **Refresh Codex status**, both test reminders, or **Exit**.
 - The full-screen reminder closes through the button, `Enter`, `Escape`, or `Alt+F4`; the tray app keeps running.
 
 ## Privacy and security
 
-Codex Limit Reminder does not sign in to Codex, read browser or Codex data, call an OpenAI API, collect telemetry, or use the network. It stores six small values under:
+Codex Limit Reminder does not ask for or store your password, session token, or API key. It does not automate a browser, collect telemetry, or run its own cloud service. It starts the installed `codex.exe app-server` locally over hidden standard input/output and makes the read-only `account/rateLimits/read` request; Codex itself uses your existing sign-in.
+
+Local settings are stored under:
 
 ```text
 HKEY_CURRENT_USER\Software\CodexLimitReminder
@@ -85,7 +88,7 @@ Manual test hooks:
 
 This is a direct Win32 C# application compiled with NativeAOT. That choice keeps the distribution self-contained and much smaller than a WinUI runtime bundle while retaining native controls, UI Automation names, high-contrast system colors, per-monitor DPI awareness, and a GUI-only startup path.
 
-The test suite covers reset rollover, day-6/day-7 selection, duplicate suppression, missed-day behavior, reminder ordering, and safe startup-command quoting.
+The test suite covers App Server response parsing, correct selection of the main Codex weekly bucket, day-6/day-7 selection from the exact reset timestamp, duplicate suppression, missed-day behavior, and safe startup-command quoting.
 
 ## License
 

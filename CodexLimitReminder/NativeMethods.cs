@@ -26,6 +26,7 @@ internal static class NativeMethods
     internal const uint WmApp = 0x8000;
     internal const uint WmTrayIcon = WmApp + 1;
     internal const uint WmExternalCommand = WmApp + 2;
+    internal const uint WmRateLimitRefreshComplete = WmApp + 3;
 
     internal const uint NinSelect = 0x0400;
     internal const uint VkEscape = 0x1B;

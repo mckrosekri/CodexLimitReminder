@@ -9,37 +9,24 @@ internal sealed class TrayApplication : IDisposable
 {
     private const uint TrayIconId = 1;
     private const nuint SchedulerTimerId = 1;
+    private const nuint RateRefreshTimerId = 2;
 
     private const int MenuSettings = 100;
     private const int MenuTestDay6 = 101;
     private const int MenuTestDay7 = 102;
     private const int MenuExit = 103;
+    private const int MenuRefresh = 104;
 
-    private const int ResetDayControl = 201;
-    private const int ResetTimeControl = 202;
-    private const int ReminderTimeControl = 203;
-    private const int StartupControl = 204;
+    private const int ConnectionStatusControl = 201;
+    private const int ResetStatusControl = 202;
+    private const int UsageStatusControl = 203;
+    private const int ReminderTimeControl = 204;
     private const int StatusControl = 205;
     private const int SaveControl = 206;
-    private const int TestControl = 207;
-    private const int HideControl = 208;
+    private const int RefreshControl = 207;
+    private const int TestControl = 208;
+    private const int HideControl = 209;
     private const int AlertCloseControl = 301;
-
-    private static readonly DayOfWeek[] DayValues =
-    {
-        DayOfWeek.Monday,
-        DayOfWeek.Tuesday,
-        DayOfWeek.Wednesday,
-        DayOfWeek.Thursday,
-        DayOfWeek.Friday,
-        DayOfWeek.Saturday,
-        DayOfWeek.Sunday
-    };
-
-    private static readonly string[] DayNames =
-    {
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
-    };
 
     private static readonly NativeMethods.WindowProc MessageProcedure = MessageWindowProcedure;
     private static readonly NativeMethods.WindowProc SettingsProcedure = SettingsWindowProcedure;
@@ -48,7 +35,11 @@ internal sealed class TrayApplication : IDisposable
 
     private readonly nint _instance;
     private readonly uint _taskbarCreatedMessage;
+    private readonly object _refreshLock = new();
+    private readonly CancellationTokenSource _shutdown = new();
     private AppSettings _settings;
+    private WeeklyRateLimit? _weeklyLimit;
+    private RateLimitRefreshResult? _pendingRefresh;
     private nint _messageWindow;
     private nint _settingsWindow;
     private nint _alertWindow;
@@ -60,6 +51,9 @@ internal sealed class TrayApplication : IDisposable
     private bool _settingsVisible;
     private bool _alertVisible;
     private bool _exiting;
+    private bool _refreshInProgress;
+    private int _refreshFailureCount;
+    private string _connectionStatus = "Connecting to Codex…";
     private int _alertCycleDay = 6;
     private int _alertDaysBeforeReset = 2;
     private DateTime _alertReset;
@@ -70,6 +64,17 @@ internal sealed class TrayApplication : IDisposable
         _instance = NativeMethods.GetModuleHandle(null);
         _taskbarCreatedMessage = NativeMethods.RegisterWindowMessage("TaskbarCreated");
         _settings = SettingsStore.Load();
+        if (_settings.LastKnownResetUnixSeconds > DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+        {
+            _weeklyLimit = new WeeklyRateLimit(
+                "codex",
+                null,
+                _settings.LastKnownUsedPercent ?? 0,
+                7 * 24 * 60,
+                _settings.LastKnownResetUnixSeconds,
+                _settings.LastKnownPlanType);
+            _connectionStatus = "Using saved Codex data while refreshing…";
+        }
 
         RegisterWindowClasses();
         _messageWindow = CreateRequiredWindow(
@@ -99,6 +104,8 @@ internal sealed class TrayApplication : IDisposable
         {
             ShowTestAlert(7);
         }
+
+        BeginRateLimitRefresh();
     }
 
     public int Run()
@@ -137,7 +144,11 @@ internal sealed class TrayApplication : IDisposable
         if (_messageWindow != 0)
         {
             NativeMethods.KillTimer(_messageWindow, SchedulerTimerId);
+            NativeMethods.KillTimer(_messageWindow, RateRefreshTimerId);
         }
+
+        _shutdown.Cancel();
+        _shutdown.Dispose();
 
         Destroy(ref _alertWindow);
         Destroy(ref _settingsWindow);
@@ -264,6 +275,8 @@ internal sealed class TrayApplication : IDisposable
         try
         {
             NativeMethods.AppendMenu(menu, NativeMethods.MfString | NativeMethods.MfDefault, MenuSettings, "Settings…");
+            NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuRefresh, "Refresh Codex status");
+            NativeMethods.AppendMenu(menu, NativeMethods.MfSeparator, 0, null);
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestDay6, "Test day 6 reminder");
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestDay7, "Test day 7 reminder");
             NativeMethods.AppendMenu(menu, NativeMethods.MfSeparator, 0, null);
@@ -301,6 +314,9 @@ internal sealed class TrayApplication : IDisposable
             case MenuTestDay7:
                 ShowTestAlert(7);
                 break;
+            case MenuRefresh:
+                BeginRateLimitRefresh();
+                break;
             case MenuExit:
                 ExitApplication();
                 break;
@@ -311,11 +327,12 @@ internal sealed class TrayApplication : IDisposable
     {
         EnsureSettingsWindow();
         PopulateSettingsControls();
+        UpdateCodexStatusControls();
         UpdateNextReminderText();
         _settingsVisible = true;
         NativeMethods.ShowWindow(_settingsWindow, NativeMethods.SwRestore);
         NativeMethods.SetForegroundWindow(_settingsWindow);
-        NativeMethods.SetFocus(NativeMethods.GetDlgItem(_settingsWindow, ResetDayControl));
+        NativeMethods.SetFocus(NativeMethods.GetDlgItem(_settingsWindow, ReminderTimeControl));
     }
 
     private void HideSettings()
@@ -338,7 +355,7 @@ internal sealed class TrayApplication : IDisposable
 
         uint dpi = NativeMethods.GetDpiForSystem();
         int width = Scale(600, dpi);
-        int height = Scale(500, dpi);
+        int height = Scale(540, dpi);
         NativeMethods.GetCursorPos(out NativeMethods.Point cursor);
         NativeMethods.MonitorInfo monitor = GetMonitorInfo(cursor);
         int x = monitor.Work.Left + (monitor.Work.Width - width) / 2;
@@ -365,87 +382,62 @@ internal sealed class TrayApplication : IDisposable
 
         nint title = CreateControl("STATIC", "Codex Limit Reminder", NativeMethods.SsLeft, 28, 24, 520, 38, window, 0, dpi);
         ApplyFont(title, _titleFont);
-        CreateControl("STATIC", "Runs quietly in the tray and alerts you on mornings 6 and 7 of each weekly cycle.", NativeMethods.SsLeft, 30, 70, 530, 42, window, 0, dpi);
-
-        CreateControl("STATIC", "Weekly reset day", NativeMethods.SsLeft, 30, 128, 170, 24, window, 0, dpi);
-        nint dayCombo = CreateControl(
-            "COMBOBOX",
-            string.Empty,
-            NativeMethods.CbsDropDownList | NativeMethods.WsVScroll | NativeMethods.WsTabStop,
-            215,
-            122,
-            330,
-            220,
-            window,
-            ResetDayControl,
-            dpi);
-        foreach (string day in DayNames)
-        {
-            NativeMethods.SendMessageString(dayCombo, NativeMethods.CbAddString, 0, day);
-        }
-
-        CreateControl("STATIC", "Weekly reset time", NativeMethods.SsLeft, 30, 177, 170, 24, window, 0, dpi);
         CreateControl(
-            "EDIT",
-            string.Empty,
-            NativeMethods.EsAutoHScroll | NativeMethods.WsTabStop | NativeMethods.WsBorder,
-            215,
-            171,
-            120,
+            "STATIC",
+            "Reads your signed-in Codex weekly limit automatically. Choose only what time the two alerts appear.",
+            NativeMethods.SsLeft,
             30,
+            70,
+            530,
+            42,
             window,
-            ResetTimeControl,
-            dpi,
-            NativeMethods.WsExClientEdge);
-        CreateControl("STATIC", "24-hour HH:mm", NativeMethods.SsLeft, 350, 177, 190, 24, window, 0, dpi);
+            0,
+            dpi);
 
-        CreateControl("STATIC", "Morning alert time", NativeMethods.SsLeft, 30, 226, 170, 24, window, 0, dpi);
+        CreateControl("STATIC", "Codex connection", NativeMethods.SsLeft, 30, 125, 170, 24, window, 0, dpi);
+        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 125, 330, 38, window, ConnectionStatusControl, dpi);
+
+        CreateControl("STATIC", "Weekly reset", NativeMethods.SsLeft, 30, 180, 170, 24, window, 0, dpi);
+        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 180, 330, 38, window, ResetStatusControl, dpi);
+
+        CreateControl("STATIC", "Weekly usage", NativeMethods.SsLeft, 30, 235, 170, 24, window, 0, dpi);
+        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 235, 330, 38, window, UsageStatusControl, dpi);
+
+        CreateControl("STATIC", "Notification time", NativeMethods.SsLeft, 30, 290, 170, 24, window, 0, dpi);
         CreateControl(
             "EDIT",
             string.Empty,
             NativeMethods.EsAutoHScroll | NativeMethods.WsTabStop | NativeMethods.WsBorder,
             215,
-            220,
+            284,
             120,
             30,
             window,
             ReminderTimeControl,
             dpi,
             NativeMethods.WsExClientEdge);
-        CreateControl("STATIC", "24-hour HH:mm", NativeMethods.SsLeft, 350, 226, 190, 24, window, 0, dpi);
-
-        CreateControl(
-            "BUTTON",
-            "Start quietly with Windows",
-            NativeMethods.BsAutoCheckBox | NativeMethods.WsTabStop,
-            30,
-            273,
-            300,
-            30,
-            window,
-            StartupControl,
-            dpi);
+        CreateControl("STATIC", "24-hour HH:mm", NativeMethods.SsLeft, 350, 290, 190, 24, window, 0, dpi);
 
         CreateControl(
             "STATIC",
-            "Enter the reset day and time shown in Codex Settings → Usage. The schedule repeats every 7 days.",
+            "No API key or reset-day setup. The app connects locally through Codex and starts quietly with Windows.",
             NativeMethods.SsLeft,
             30,
-            315,
+            333,
             525,
             42,
             window,
             0,
             dpi);
 
-        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 30, 365, 525, 42, window, StatusControl, dpi);
+        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 30, 382, 525, 44, window, StatusControl, dpi);
 
         CreateControl(
             "BUTTON",
-            "Save",
+            "Save time",
             NativeMethods.BsDefPushButton | NativeMethods.WsTabStop,
             30,
-            425,
+            457,
             120,
             38,
             window,
@@ -453,22 +445,33 @@ internal sealed class TrayApplication : IDisposable
             dpi);
         CreateControl(
             "BUTTON",
+            "Refresh Codex",
+            NativeMethods.BsPushButton | NativeMethods.WsTabStop,
+            163,
+            457,
+            130,
+            38,
+            window,
+            RefreshControl,
+            dpi);
+        CreateControl(
+            "BUTTON",
             "Test full screen",
             NativeMethods.BsPushButton | NativeMethods.WsTabStop,
-            165,
-            425,
-            175,
+            306,
+            457,
+            145,
             38,
             window,
             TestControl,
             dpi);
         CreateControl(
             "BUTTON",
-            "Hide to tray",
+            "Hide",
             NativeMethods.BsPushButton | NativeMethods.WsTabStop,
-            355,
-            425,
-            190,
+            464,
+            457,
+            81,
             38,
             window,
             HideControl,
@@ -505,55 +508,30 @@ internal sealed class TrayApplication : IDisposable
 
     private void PopulateSettingsControls()
     {
-        int selectedDay = Array.IndexOf(DayValues, _settings.ResetDay);
-        NativeMethods.SendMessage(NativeMethods.GetDlgItem(_settingsWindow, ResetDayControl), NativeMethods.CbSetCurSel, (nuint)Math.Max(0, selectedDay), 0);
-        NativeMethods.SetWindowText(NativeMethods.GetDlgItem(_settingsWindow, ResetTimeControl), FormatTime(_settings.ResetTime));
         NativeMethods.SetWindowText(NativeMethods.GetDlgItem(_settingsWindow, ReminderTimeControl), FormatTime(_settings.ReminderTime));
-        NativeMethods.SendMessage(
-            NativeMethods.GetDlgItem(_settingsWindow, StartupControl),
-            NativeMethods.BmSetCheck,
-            _settings.StartWithWindows ? NativeMethods.BstChecked : 0,
-            0);
     }
 
     private void SaveSettings()
     {
-        int selectedDay = (int)NativeMethods.SendMessage(
-            NativeMethods.GetDlgItem(_settingsWindow, ResetDayControl),
-            NativeMethods.CbGetCurSel,
-            0,
-            0);
-
-        if (selectedDay < 0 || selectedDay >= DayValues.Length ||
-            !TryReadTime(ResetTimeControl, out TimeSpan resetTime) ||
-            !TryReadTime(ReminderTimeControl, out TimeSpan reminderTime))
+        if (!TryReadTime(ReminderTimeControl, out TimeSpan reminderTime))
         {
             NativeMethods.MessageBox(
                 _settingsWindow,
-                "Choose a reset day and enter both times as 24-hour HH:mm values, for example 09:00.",
+                "Enter the notification time as a 24-hour HH:mm value, for example 09:00.",
                 "Check the reminder settings",
                 NativeMethods.MbIconError);
             return;
         }
 
-        bool startWithWindows = NativeMethods.SendMessage(
-            NativeMethods.GetDlgItem(_settingsWindow, StartupControl),
-            NativeMethods.BmGetCheck,
-            0,
-            0) == (nint)NativeMethods.BstChecked;
-
         AppSettings updated = _settings with
         {
-            ResetDay = DayValues[selectedDay],
-            ResetTime = resetTime,
             ReminderTime = reminderTime,
-            StartWithWindows = startWithWindows,
             IsConfigured = true
         };
 
         try
         {
-            StartupRegistration.Apply(startWithWindows, Environment.ProcessPath!);
+            StartupRegistration.Apply(true, Environment.ProcessPath!);
             SettingsStore.Save(updated);
         }
         catch (Exception exception)
@@ -583,22 +561,77 @@ internal sealed class TrayApplication : IDisposable
             out value) && value >= TimeSpan.Zero && value < TimeSpan.FromDays(1);
     }
 
+    private void UpdateCodexStatusControls()
+    {
+        if (_settingsWindow == 0)
+        {
+            return;
+        }
+
+        NativeMethods.SetWindowText(
+            NativeMethods.GetDlgItem(_settingsWindow, ConnectionStatusControl),
+            _connectionStatus);
+
+        if (_weeklyLimit is null)
+        {
+            NativeMethods.SetWindowText(NativeMethods.GetDlgItem(_settingsWindow, ResetStatusControl), "Waiting for Codex…");
+            NativeMethods.SetWindowText(NativeMethods.GetDlgItem(_settingsWindow, UsageStatusControl), "Waiting for Codex…");
+            return;
+        }
+
+        DateTime resetLocal = _weeklyLimit.ResetsAt.ToLocalTime().DateTime;
+        NativeMethods.SetWindowText(
+            NativeMethods.GetDlgItem(_settingsWindow, ResetStatusControl),
+            $"{resetLocal:dddd, d MMM yyyy 'at' HH:mm}");
+
+        string plan = string.IsNullOrWhiteSpace(_weeklyLimit.PlanType)
+            ? string.Empty
+            : $" · {_weeklyLimit.PlanType}";
+        NativeMethods.SetWindowText(
+            NativeMethods.GetDlgItem(_settingsWindow, UsageStatusControl),
+            $"{_weeklyLimit.UsedPercent:0.#}% used{plan} · 7-day window");
+    }
+
     private void UpdateNextReminderText()
     {
+        if (_settingsWindow == 0)
+        {
+            return;
+        }
+
         if (!_settings.IsConfigured)
         {
             NativeMethods.SetWindowText(
                 NativeMethods.GetDlgItem(_settingsWindow, StatusControl),
-                "Save once to activate the two weekly reminders.");
+                "Save the notification time once to activate reminders.");
+            return;
+        }
+
+        if (_weeklyLimit is null)
+        {
+            NativeMethods.SetWindowText(
+                NativeMethods.GetDlgItem(_settingsWindow, StatusControl),
+                "Waiting for Codex before scheduling the next reminder…");
             return;
         }
 
         DateTime now = DateTime.Now;
-        ReminderOccurrence first = ReminderScheduler.FindNext(_settings, now);
-        ReminderOccurrence second = ReminderScheduler.FindNext(_settings, first.DueLocal.AddSeconds(1));
+        ReminderOccurrence? first = ReminderScheduler.FindNext(_settings, _weeklyLimit, now);
+        if (first is null)
+        {
+            NativeMethods.SetWindowText(
+                NativeMethods.GetDlgItem(_settingsWindow, StatusControl),
+                "No alert remains before this reset. Watching Codex for the next cycle.");
+            return;
+        }
+
+        ReminderOccurrence? second = ReminderScheduler.FindNext(_settings, _weeklyLimit, first.DueLocal.AddSeconds(1));
+        string schedule = second is null
+            ? $"Next: {first.DueLocal:ddd, d MMM 'at' HH:mm}"
+            : $"Next: {first.DueLocal:ddd, d MMM 'at' HH:mm} and {second.DueLocal:ddd, d MMM 'at' HH:mm}";
         NativeMethods.SetWindowText(
             NativeMethods.GetDlgItem(_settingsWindow, StatusControl),
-            $"Next: {first.DueLocal:ddd, d MMM HH:mm} and {second.DueLocal:ddd, d MMM HH:mm}");
+            schedule);
     }
 
     private void EvaluateAndSchedule()
@@ -609,13 +642,21 @@ internal sealed class TrayApplication : IDisposable
         }
 
         NativeMethods.KillTimer(_messageWindow, SchedulerTimerId);
-        if (!_settings.IsConfigured)
+        if (!_settings.IsConfigured || _weeklyLimit is null)
         {
+            UpdateNextReminderText();
+            return;
+        }
+
+        if (_weeklyLimit.ResetsAt <= DateTimeOffset.UtcNow)
+        {
+            BeginRateLimitRefresh();
+            UpdateNextReminderText();
             return;
         }
 
         DateTime now = DateTime.Now;
-        ReminderOccurrence? due = ReminderScheduler.FindDue(_settings, now);
+        ReminderOccurrence? due = ReminderScheduler.FindDue(_settings, _weeklyLimit, now);
         if (due is not null)
         {
             _settings = _settings with { LastReminderKey = due.Key };
@@ -623,17 +664,127 @@ internal sealed class TrayApplication : IDisposable
             ShowAlert(due);
         }
 
-        ReminderOccurrence next = ReminderScheduler.FindNext(_settings, now);
-        long milliseconds = (long)Math.Ceiling((next.DueLocal - now).TotalMilliseconds);
-        uint timerDelay = (uint)Math.Clamp(milliseconds, 1000L, (long)uint.MaxValue - 1);
-        NativeMethods.SetTimer(_messageWindow, SchedulerTimerId, timerDelay, 0);
+        ReminderOccurrence? next = ReminderScheduler.FindNext(_settings, _weeklyLimit, now);
+        if (next is not null)
+        {
+            long milliseconds = (long)Math.Ceiling((next.DueLocal - now).TotalMilliseconds);
+            uint timerDelay = (uint)Math.Clamp(milliseconds, 1000L, (long)uint.MaxValue - 1);
+            NativeMethods.SetTimer(_messageWindow, SchedulerTimerId, timerDelay, 0);
+        }
+
+        UpdateNextReminderText();
     }
 
     private void ShowTestAlert(int cycleDay)
     {
         DateTime reset = DateTime.Now.AddDays(cycleDay == 6 ? 2 : 1);
-        ShowAlert(new ReminderOccurrence(DateTime.Now, reset, cycleDay, cycleDay == 6 ? 2 : 1));
+        long resetUnixSeconds = new DateTimeOffset(reset).ToUnixTimeSeconds();
+        ShowAlert(new ReminderOccurrence(DateTime.Now, reset, resetUnixSeconds, cycleDay, cycleDay == 6 ? 2 : 1));
     }
+
+    private void BeginRateLimitRefresh()
+    {
+        if (_exiting || _messageWindow == 0 || _refreshInProgress)
+        {
+            return;
+        }
+
+        _refreshInProgress = true;
+        NativeMethods.KillTimer(_messageWindow, RateRefreshTimerId);
+        _connectionStatus = "Connecting to Codex automatically…";
+        UpdateCodexStatusControls();
+
+        _ = Task.Run(async () =>
+        {
+            RateLimitRefreshResult result;
+            try
+            {
+                WeeklyRateLimit limit = await CodexAppServerClient.ReadWeeklyLimitAsync(
+                    TimeSpan.FromSeconds(20),
+                    _shutdown.Token).ConfigureAwait(false);
+                result = new RateLimitRefreshResult(limit, null);
+            }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                result = new RateLimitRefreshResult(null, FriendlyConnectionError(exception));
+            }
+
+            lock (_refreshLock)
+            {
+                _pendingRefresh = result;
+            }
+
+            if (!_exiting && _messageWindow != 0)
+            {
+                NativeMethods.PostMessage(_messageWindow, NativeMethods.WmRateLimitRefreshComplete, 0, 0);
+            }
+        });
+    }
+
+    private void CompleteRateLimitRefresh()
+    {
+        RateLimitRefreshResult? result;
+        lock (_refreshLock)
+        {
+            result = _pendingRefresh;
+            _pendingRefresh = null;
+        }
+
+        _refreshInProgress = false;
+        if (result?.Limit is not null)
+        {
+            _weeklyLimit = result.Limit;
+            _refreshFailureCount = 0;
+            _connectionStatus = "Connected automatically to Codex";
+            _settings = _settings with
+            {
+                LastKnownResetUnixSeconds = result.Limit.ResetsAtUnixSeconds,
+                LastKnownUsedPercent = result.Limit.UsedPercent,
+                LastKnownPlanType = result.Limit.PlanType
+            };
+            SettingsStore.Save(_settings);
+            ScheduleRateLimitRefresh(TimeSpan.FromHours(1));
+            EvaluateAndSchedule();
+        }
+        else
+        {
+            _refreshFailureCount++;
+            _connectionStatus = $"Could not read Codex: {result?.Error ?? "unknown error"} Retrying automatically.";
+            TimeSpan retry = _refreshFailureCount switch
+            {
+                1 => TimeSpan.FromMinutes(5),
+                2 => TimeSpan.FromMinutes(15),
+                _ => TimeSpan.FromHours(1)
+            };
+            ScheduleRateLimitRefresh(retry);
+        }
+
+        UpdateCodexStatusControls();
+        UpdateNextReminderText();
+    }
+
+    private void ScheduleRateLimitRefresh(TimeSpan delay)
+    {
+        if (_messageWindow == 0 || _exiting)
+        {
+            return;
+        }
+
+        uint milliseconds = (uint)Math.Clamp((long)delay.TotalMilliseconds, 1000L, (long)uint.MaxValue - 1);
+        NativeMethods.SetTimer(_messageWindow, RateRefreshTimerId, milliseconds, 0);
+    }
+
+    private static string FriendlyConnectionError(Exception exception) => exception switch
+    {
+        FileNotFoundException => "Codex is not installed.",
+        TimeoutException => "the connection timed out.",
+        Win32Exception => "Windows blocked the detected Codex executable.",
+        _ => exception.Message.TrimEnd('.') + "."
+    };
 
     private void ShowAlert(ReminderOccurrence occurrence)
     {
@@ -853,13 +1004,22 @@ internal sealed class TrayApplication : IDisposable
                 {
                     app.EvaluateAndSchedule();
                 }
+                else if (wParam == RateRefreshTimerId)
+                {
+                    NativeMethods.KillTimer(app._messageWindow, RateRefreshTimerId);
+                    app.BeginRateLimitRefresh();
+                }
 
                 return 0;
             case NativeMethods.WmTimeChange:
                 app.EvaluateAndSchedule();
+                app.BeginRateLimitRefresh();
                 return 0;
             case NativeMethods.WmExternalCommand:
                 app.HandleExternalCommand((LaunchCommandKind)(int)wParam);
+                return 0;
+            case NativeMethods.WmRateLimitRefreshComplete:
+                app.CompleteRateLimitRefresh();
                 return 0;
         }
 
@@ -891,6 +1051,12 @@ internal sealed class TrayApplication : IDisposable
                 if (command == TestControl)
                 {
                     app.ShowTestAlert(6);
+                    return 0;
+                }
+
+                if (command == RefreshControl)
+                {
+                    app.BeginRateLimitRefresh();
                     return 0;
                 }
 
@@ -1006,4 +1172,6 @@ internal sealed class TrayApplication : IDisposable
         NativeMethods.DestroyWindow(window);
         window = 0;
     }
+
+    private sealed record RateLimitRefreshResult(WeeklyRateLimit? Limit, string? Error);
 }
