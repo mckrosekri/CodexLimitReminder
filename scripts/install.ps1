@@ -22,7 +22,22 @@ if ($running) {
     $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
-Copy-Item -LiteralPath $source -Destination $installedExecutable -Force
+$copied = $false
+for ($attempt = 1; $attempt -le 20; $attempt++) {
+    try {
+        Copy-Item -LiteralPath $source -Destination $installedExecutable -Force
+        $copied = $true
+        break
+    }
+    catch [IO.IOException] {
+        if ($attempt -eq 20) { throw }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
+if (-not $copied) {
+    throw 'The application could not be replaced.'
+}
 
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 New-Item -Path $runKey -Force | Out-Null
