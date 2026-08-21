@@ -1,0 +1,16 @@
+# Build output
+**/bin/
+**/obj/
+artifacts/
+
+# Visual Studio / IDE state
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Unused WinUI template artwork (not part of the native app)
+CodexLimitReminder/Assets/
+
+# Local visual-test evidence
+test-results/

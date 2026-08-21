@@ -1,0 +1,31 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build and test
+        shell: pwsh
+        run: .\scripts\build.ps1
+
+      - name: Upload native executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: CodexLimitReminder-win-x64
+          path: artifacts/CodexLimitReminder-win-x64.zip
+          if-no-files-found: error

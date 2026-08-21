@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>CodexLimitReminder.Tests</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\CodexLimitReminder\AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="..\CodexLimitReminder\ReminderScheduler.cs" Link="ReminderScheduler.cs" />
+    <Compile Include="..\CodexLimitReminder\StartupRegistration.cs" Link="StartupRegistration.cs" />
+  </ItemGroup>
+</Project>

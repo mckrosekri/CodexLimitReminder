@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="CodexLimitReminder.csproj" />
+  <Project Path="..\CodexLimitReminder.Tests\CodexLimitReminder.Tests.csproj" />
+</Solution>
