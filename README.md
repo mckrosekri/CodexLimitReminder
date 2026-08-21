@@ -9,6 +9,7 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 - Reads the exact weekly reset and current usage from your signed-in local Codex installation.
 - Only one setup choice: the morning notification time.
 - Refreshes hourly, retries automatically after connection problems, and keeps the last known reset offline.
+- Starts quietly at Windows sign-in and repairs its own startup entry whenever the app launches.
 - Native single-file x64 executable with no installer framework or runtime bundle.
 - Stores only the notification time, reminder deduplication key, and last Codex status in the current user's registry.
 
@@ -20,9 +21,9 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 2. Extract the ZIP.
 3. Right-click `install.ps1`, choose **Run with PowerShell**, and follow the first-run settings window.
 
-The installer copies the app to `%LOCALAPPDATA%\Programs\CodexLimitReminder`, creates a current-user startup entry, and opens the settings window. The startup target is the GUI-subsystem executable itself, so Windows does not flash a console.
+The installer copies the app to `%LOCALAPPDATA%\Programs\CodexLimitReminder`, creates a current-user startup entry, and opens the settings window. The app also re-creates that entry on every primary launch, so startup behavior persists independently of the installer. The startup target is the GUI-subsystem executable itself, so Windows does not flash a console.
 
-You can also run `CodexLimitReminder.exe` directly without installing it. The installer enables quiet startup with Windows; saving from a portable copy does the same.
+You can also run `CodexLimitReminder.exe` directly without installing it. Launching a portable copy once enables quiet startup with Windows automatically.
 
 ## One-time setup
 

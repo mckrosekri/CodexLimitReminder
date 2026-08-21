@@ -25,6 +25,9 @@ internal static class Program
 
         try
         {
+            string executablePath = Environment.ProcessPath
+                ?? throw new InvalidOperationException("The application executable path could not be determined.");
+            StartupRegistration.Apply(enabled: true, executablePath);
             using var app = new TrayApplication(command);
             return app.Run();
         }
