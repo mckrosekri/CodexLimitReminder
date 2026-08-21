@@ -4,6 +4,7 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 
 - Normally visible only as a system-tray icon; no background taskbar window.
 - Full-screen, topmost reminder with a keyboard-accessible **Close reminder** button.
+- Prominently shows the live weekly balance, for example **7% used · 93% left**.
 - Two alerts per cycle: day 6 (two calendar days before reset) and day 7 (one calendar day before reset).
 - Reads the exact weekly reset and current usage from your signed-in local Codex installation.
 - Only one setup choice: the morning notification time.

@@ -46,6 +46,7 @@ internal sealed class TrayApplication : IDisposable
     private nint _bodyFont;
     private nint _titleFont;
     private nint _alertTitleFont;
+    private nint _alertUsageFont;
     private nint _alertBodyFont;
     private bool _trayIconAdded;
     private bool _settingsVisible;
@@ -57,6 +58,9 @@ internal sealed class TrayApplication : IDisposable
     private int _alertCycleDay = 6;
     private int _alertDaysBeforeReset = 2;
     private DateTime _alertReset;
+    private double _alertUsedPercent;
+    private double _alertRemainingPercent;
+    private bool _alertHasUsage;
 
     public TrayApplication(LaunchCommand initialCommand)
     {
@@ -154,6 +158,7 @@ internal sealed class TrayApplication : IDisposable
         Destroy(ref _settingsWindow);
         Destroy(ref _messageWindow);
         DeleteFont(ref _alertBodyFont);
+        DeleteFont(ref _alertUsageFont);
         DeleteFont(ref _alertTitleFont);
         DeleteFont(ref _titleFont);
         DeleteFont(ref _bodyFont);
@@ -589,7 +594,8 @@ internal sealed class TrayApplication : IDisposable
             : $" · {_weeklyLimit.PlanType}";
         NativeMethods.SetWindowText(
             NativeMethods.GetDlgItem(_settingsWindow, UsageStatusControl),
-            $"{_weeklyLimit.UsedPercent:0.#}% used{plan} · 7-day window");
+            $"{FormatPercentage(_weeklyLimit.NormalizedUsedPercent)}% used · " +
+            $"{FormatPercentage(_weeklyLimit.RemainingPercent)}% left{plan} · 7-day window");
     }
 
     private void UpdateNextReminderText()
@@ -793,6 +799,14 @@ internal sealed class TrayApplication : IDisposable
         _alertCycleDay = occurrence.CycleDay;
         _alertDaysBeforeReset = occurrence.DaysBeforeReset;
         _alertReset = occurrence.ResetLocal;
+        _alertHasUsage = _weeklyLimit is not null;
+        _alertUsedPercent = _weeklyLimit?.NormalizedUsedPercent ?? 0;
+        _alertRemainingPercent = _weeklyLimit?.RemainingPercent ?? 100;
+
+        string alertWindowTitle = _alertHasUsage
+            ? $"Codex weekly limit reminder — {FormatPercentage(_alertUsedPercent)}% used, {FormatPercentage(_alertRemainingPercent)}% left"
+            : "Codex weekly limit reminder — usage data unavailable";
+        NativeMethods.SetWindowText(_alertWindow, alertWindowTitle);
 
         NativeMethods.GetCursorPos(out NativeMethods.Point cursor);
         NativeMethods.MonitorInfo monitor = GetMonitorInfo(cursor);
@@ -834,6 +848,7 @@ internal sealed class TrayApplication : IDisposable
     {
         uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(window));
         _alertTitleFont = CreateSegoeFont(38, 600, dpi);
+        _alertUsageFont = CreateSegoeFont(30, 600, dpi);
         _alertBodyFont = CreateSegoeFont(18, 400, dpi);
         nint close = CreateControl(
             "BUTTON",
@@ -909,12 +924,30 @@ internal sealed class TrayApplication : IDisposable
                 ref title,
                 NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
 
+            NativeMethods.Rect usage = new()
+            {
+                Left = client.Left + client.Width / 10,
+                Top = client.Top + client.Height * 9 / 20,
+                Right = client.Right - client.Width / 10,
+                Bottom = client.Top + client.Height * 3 / 5
+            };
+            NativeMethods.SelectObject(deviceContext, _alertUsageFont);
+            string usageText = _alertHasUsage
+                ? $"{FormatPercentage(_alertUsedPercent)}% USED   ·   {FormatPercentage(_alertRemainingPercent)}% LEFT"
+                : "USAGE DATA UNAVAILABLE";
+            NativeMethods.DrawText(
+                deviceContext,
+                usageText,
+                -1,
+                ref usage,
+                NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
+
             NativeMethods.Rect body = new()
             {
                 Left = client.Left + client.Width / 8,
-                Top = client.Top + client.Height / 2,
+                Top = client.Top + client.Height * 3 / 5,
                 Right = client.Right - client.Width / 8,
-                Bottom = client.Top + client.Height * 2 / 3
+                Bottom = client.Top + client.Height * 7 / 10
             };
             NativeMethods.SelectObject(deviceContext, _alertBodyFont);
             NativeMethods.DrawText(
@@ -1114,6 +1147,8 @@ internal sealed class TrayApplication : IDisposable
     }
 
     private static string FormatTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}";
+
+    private static string FormatPercentage(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
 
     private static int Scale(int value, uint dpi) => NativeMethods.MulDiv(value, (int)dpi, 96);
 

@@ -5,6 +5,8 @@ var tests = new (string Name, Action Run)[]
     ("parser reads the main Codex weekly window", ParserReadsMainCodexWeeklyWindow),
     ("parser uses a weekly secondary window when primary is short", ParserUsesWeeklySecondaryWindow),
     ("parser rejects responses without a weekly Codex limit", ParserRejectsMissingWeeklyWindow),
+    ("usage calculates the remaining weekly percentage", UsageCalculatesRemainingPercentage),
+    ("usage percentages are safely clamped", UsagePercentagesAreClamped),
     ("day 6 is due two mornings before the exact Codex reset", Day6IsDue),
     ("day 7 is due one morning before the exact Codex reset", Day7IsDue),
     ("a reminder is not repeated after its key is saved", ReminderDoesNotRepeat),
@@ -80,6 +82,26 @@ static void ParserRejectsMissingWeeklyWindow()
         """;
 
     Throws<InvalidOperationException>(() => CodexRateLimitParser.ParseResponse(json));
+}
+
+static void UsageCalculatesRemainingPercentage()
+{
+    WeeklyRateLimit limit = Limit();
+    Equal(7d, limit.NormalizedUsedPercent);
+    Equal(93d, limit.RemainingPercent);
+}
+
+static void UsagePercentagesAreClamped()
+{
+    WeeklyRateLimit overLimit = Limit() with { UsedPercent = 125 };
+    WeeklyRateLimit belowZero = Limit() with { UsedPercent = -5 };
+    WeeklyRateLimit invalid = Limit() with { UsedPercent = double.NaN };
+    Equal(100d, overLimit.NormalizedUsedPercent);
+    Equal(0d, overLimit.RemainingPercent);
+    Equal(0d, belowZero.NormalizedUsedPercent);
+    Equal(100d, belowZero.RemainingPercent);
+    Equal(0d, invalid.NormalizedUsedPercent);
+    Equal(100d, invalid.RemainingPercent);
 }
 
 static void Day6IsDue()
