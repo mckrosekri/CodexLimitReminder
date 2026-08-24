@@ -6,6 +6,7 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 - Full-screen, topmost reminder with a keyboard-accessible **Close reminder** button.
 - Prominently shows the live weekly balance, for example **7% used · 93% left**.
 - Two alerts per cycle: day 6 (two calendar days before reset) and day 7 (one calendar day before reset).
+- Automatic full-screen safety alerts at 80% and 95% used, so unusually heavy use cannot exhaust the limit before day 6.
 - Reads the exact weekly reset and current usage from your signed-in local Codex installation.
 - Only one setup choice: the morning notification time.
 - Refreshes hourly, retries automatically after connection problems, and keeps the last known reset offline.
@@ -29,7 +30,7 @@ You can also run `CodexLimitReminder.exe` directly without installing it. Launch
 
 1. Make sure the Codex CLI is installed and signed in.
 2. Open **Codex Limit Reminder settings** from the tray icon.
-3. Choose your preferred notification time and select **Save time**.
+3. Choose your preferred notification time and select **Save time**. Day-6/day-7 reminders use that time; 80% and 95% safety alerts appear immediately when an automatic Codex refresh first observes the threshold.
 
 That is the entire setup. The app launches Codex's local App Server without a console window and reads `account/rateLimits/read`. It selects the main `codex` seven-day window, including the exact reset timestamp and current usage percentage. It never guesses a future reset by adding seven days; after a reset it waits for Codex to expose the next exact cycle.
 
@@ -85,13 +86,16 @@ Manual test hooks:
 .\artifacts\win-x64\CodexLimitReminder.exe --show-settings
 .\artifacts\win-x64\CodexLimitReminder.exe --test-day-6
 .\artifacts\win-x64\CodexLimitReminder.exe --test-day-7
+.\artifacts\win-x64\CodexLimitReminder.exe --test-usage-95
 ```
 
 ## Design notes
 
 This is a direct Win32 C# application compiled with NativeAOT. That choice keeps the distribution self-contained and much smaller than a WinUI runtime bundle while retaining native controls, UI Automation names, high-contrast system colors, per-monitor DPI awareness, and a GUI-only startup path.
 
-The test suite covers App Server response parsing, correct selection of the main Codex weekly bucket, day-6/day-7 selection from the exact reset timestamp, duplicate suppression, missed-day behavior, and safe startup-command quoting.
+The test suite covers App Server response parsing, correct selection of the main Codex weekly bucket, day-6/day-7 selection from the exact reset timestamp, 80%/95% safety alerts, duplicate suppression, missed-day behavior, and safe startup-command quoting.
+
+For local diagnostics, the app keeps a small rotating activity log at `%LOCALAPPDATA%\CodexLimitReminder\activity.log`. It records startup repair, successful/failed Codex refreshes, exact scheduled alert times, and alert display/close events; it contains no tokens or message content.
 
 ## License
 

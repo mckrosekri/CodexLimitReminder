@@ -4,6 +4,7 @@ public sealed record AppSettings(
     TimeSpan ReminderTime,
     bool IsConfigured,
     string LastReminderKey,
+    string LastUsageWarningKey,
     long LastKnownResetUnixSeconds,
     double? LastKnownUsedPercent,
     string? LastKnownPlanType)
@@ -11,6 +12,7 @@ public sealed record AppSettings(
     public static AppSettings Default => new(
         TimeSpan.FromHours(9),
         false,
+        string.Empty,
         string.Empty,
         0,
         null,

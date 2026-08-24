@@ -16,6 +16,7 @@ internal sealed class TrayApplication : IDisposable
     private const int MenuTestDay7 = 102;
     private const int MenuExit = 103;
     private const int MenuRefresh = 104;
+    private const int MenuTestUsage95 = 105;
 
     private const int ConnectionStatusControl = 201;
     private const int ResetStatusControl = 202;
@@ -61,6 +62,8 @@ internal sealed class TrayApplication : IDisposable
     private double _alertUsedPercent;
     private double _alertRemainingPercent;
     private bool _alertHasUsage;
+    private bool _alertIsUsageWarning;
+    private int _alertUsageThreshold;
 
     public TrayApplication(LaunchCommand initialCommand)
     {
@@ -68,6 +71,7 @@ internal sealed class TrayApplication : IDisposable
         _instance = NativeMethods.GetModuleHandle(null);
         _taskbarCreatedMessage = NativeMethods.RegisterWindowMessage("TaskbarCreated");
         _settings = SettingsStore.Load();
+        ActivityLog.Write($"Loaded settings: configured={_settings.IsConfigured}, reminder={FormatTime(_settings.ReminderTime)}.");
         if (_settings.LastKnownResetUnixSeconds > DateTimeOffset.UtcNow.ToUnixTimeSeconds())
         {
             _weeklyLimit = new WeeklyRateLimit(
@@ -107,6 +111,10 @@ internal sealed class TrayApplication : IDisposable
         else if (initialCommand.Kind == LaunchCommandKind.TestDay7)
         {
             ShowTestAlert(7);
+        }
+        else if (initialCommand.Kind == LaunchCommandKind.TestUsage95)
+        {
+            ShowTestUsageWarning();
         }
 
         BeginRateLimitRefresh();
@@ -284,6 +292,7 @@ internal sealed class TrayApplication : IDisposable
             NativeMethods.AppendMenu(menu, NativeMethods.MfSeparator, 0, null);
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestDay6, "Test day 6 reminder");
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestDay7, "Test day 7 reminder");
+            NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestUsage95, "Test 95% safety reminder");
             NativeMethods.AppendMenu(menu, NativeMethods.MfSeparator, 0, null);
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuExit, "Exit");
 
@@ -318,6 +327,9 @@ internal sealed class TrayApplication : IDisposable
                 break;
             case MenuTestDay7:
                 ShowTestAlert(7);
+                break;
+            case MenuTestUsage95:
+                ShowTestUsageWarning();
                 break;
             case MenuRefresh:
                 BeginRateLimitRefresh();
@@ -663,11 +675,24 @@ internal sealed class TrayApplication : IDisposable
 
         DateTime now = DateTime.Now;
         ReminderOccurrence? due = ReminderScheduler.FindDue(_settings, _weeklyLimit, now);
+        UsageWarningOccurrence? usageWarning = UsageWarningScheduler.FindDue(_settings, _weeklyLimit);
         if (due is not null)
         {
-            _settings = _settings with { LastReminderKey = due.Key };
+            _settings = _settings with
+            {
+                LastReminderKey = due.Key,
+                LastUsageWarningKey = usageWarning?.Key ?? _settings.LastUsageWarningKey
+            };
             SettingsStore.Save(_settings);
+            ActivityLog.Write($"Showing day-{due.CycleDay} alert: {FormatPercentage(_weeklyLimit.NormalizedUsedPercent)}% used, reset {due.ResetLocal:yyyy-MM-dd HH:mm}.");
             ShowAlert(due);
+        }
+        else if (usageWarning is not null)
+        {
+            _settings = _settings with { LastUsageWarningKey = usageWarning.Key };
+            SettingsStore.Save(_settings);
+            ActivityLog.Write($"Showing {usageWarning.UsedThreshold}% safety alert: {FormatPercentage(_weeklyLimit.NormalizedUsedPercent)}% used, reset {_weeklyLimit.ResetsAt.ToLocalTime():yyyy-MM-dd HH:mm}.");
+            ShowUsageWarning(usageWarning);
         }
 
         ReminderOccurrence? next = ReminderScheduler.FindNext(_settings, _weeklyLimit, now);
@@ -676,6 +701,14 @@ internal sealed class TrayApplication : IDisposable
             long milliseconds = (long)Math.Ceiling((next.DueLocal - now).TotalMilliseconds);
             uint timerDelay = (uint)Math.Clamp(milliseconds, 1000L, (long)uint.MaxValue - 1);
             NativeMethods.SetTimer(_messageWindow, SchedulerTimerId, timerDelay, 0);
+            ReminderOccurrence? following = ReminderScheduler.FindNext(_settings, _weeklyLimit, next.DueLocal.AddSeconds(1));
+            ActivityLog.Write(following is null
+                ? $"Day alert scheduled for {next.DueLocal:yyyy-MM-dd HH:mm} (day {next.CycleDay})."
+                : $"Day alerts scheduled for {next.DueLocal:yyyy-MM-dd HH:mm} (day {next.CycleDay}) and {following.DueLocal:yyyy-MM-dd HH:mm} (day {following.CycleDay}).");
+        }
+        else
+        {
+            ActivityLog.Write($"No day alert remains before reset {_weeklyLimit.ResetsAt.ToLocalTime():yyyy-MM-dd HH:mm}; waiting for Codex to expose the next cycle.");
         }
 
         UpdateNextReminderText();
@@ -686,6 +719,15 @@ internal sealed class TrayApplication : IDisposable
         DateTime reset = DateTime.Now.AddDays(cycleDay == 6 ? 2 : 1);
         long resetUnixSeconds = new DateTimeOffset(reset).ToUnixTimeSeconds();
         ShowAlert(new ReminderOccurrence(DateTime.Now, reset, resetUnixSeconds, cycleDay, cycleDay == 6 ? 2 : 1));
+    }
+
+    private void ShowTestUsageWarning()
+    {
+        WeeklyRateLimit? actualLimit = _weeklyLimit;
+        DateTimeOffset reset = DateTimeOffset.Now.AddDays(3);
+        _weeklyLimit = new WeeklyRateLimit("codex", "Codex", 96, 10_080, reset.ToUnixTimeSeconds(), actualLimit?.PlanType);
+        ShowUsageWarning(new UsageWarningOccurrence(_weeklyLimit.ResetsAtUnixSeconds, 95));
+        _weeklyLimit = actualLimit;
     }
 
     private void BeginRateLimitRefresh()
@@ -753,6 +795,9 @@ internal sealed class TrayApplication : IDisposable
                 LastKnownPlanType = result.Limit.PlanType
             };
             SettingsStore.Save(_settings);
+            ActivityLog.Write(
+                $"Codex refresh succeeded: {FormatPercentage(result.Limit.NormalizedUsedPercent)}% used, " +
+                $"{FormatPercentage(result.Limit.RemainingPercent)}% left, reset {result.Limit.ResetsAt.ToLocalTime():yyyy-MM-dd HH:mm}.");
             ScheduleRateLimitRefresh(TimeSpan.FromHours(1));
             EvaluateAndSchedule();
         }
@@ -767,6 +812,7 @@ internal sealed class TrayApplication : IDisposable
                 _ => TimeSpan.FromHours(1)
             };
             ScheduleRateLimitRefresh(retry);
+            ActivityLog.Write($"Codex refresh failed: {result?.Error ?? "unknown error"}; retry in {retry.TotalMinutes:0} minutes.");
         }
 
         UpdateCodexStatusControls();
@@ -794,14 +840,32 @@ internal sealed class TrayApplication : IDisposable
 
     private void ShowAlert(ReminderOccurrence occurrence)
     {
-        EnsureAlertWindow();
-        HideSettings();
+        _alertIsUsageWarning = false;
+        _alertUsageThreshold = 0;
         _alertCycleDay = occurrence.CycleDay;
         _alertDaysBeforeReset = occurrence.DaysBeforeReset;
         _alertReset = occurrence.ResetLocal;
         _alertHasUsage = _weeklyLimit is not null;
         _alertUsedPercent = _weeklyLimit?.NormalizedUsedPercent ?? 0;
         _alertRemainingPercent = _weeklyLimit?.RemainingPercent ?? 100;
+        DisplayAlert();
+    }
+
+    private void ShowUsageWarning(UsageWarningOccurrence occurrence)
+    {
+        _alertIsUsageWarning = true;
+        _alertUsageThreshold = occurrence.UsedThreshold;
+        _alertReset = _weeklyLimit!.ResetsAt.ToLocalTime().DateTime;
+        _alertHasUsage = true;
+        _alertUsedPercent = _weeklyLimit.NormalizedUsedPercent;
+        _alertRemainingPercent = _weeklyLimit.RemainingPercent;
+        DisplayAlert();
+    }
+
+    private void DisplayAlert()
+    {
+        EnsureAlertWindow();
+        HideSettings();
 
         string alertWindowTitle = _alertHasUsage
             ? $"Codex weekly limit reminder — {FormatPercentage(_alertUsedPercent)}% used, {FormatPercentage(_alertRemainingPercent)}% left"
@@ -901,7 +965,9 @@ internal sealed class TrayApplication : IDisposable
             nint previous = NativeMethods.SelectObject(deviceContext, _alertBodyFont);
             NativeMethods.DrawText(
                 deviceContext,
-                $"WEEKLY CODEX LIMIT · DAY {_alertCycleDay}",
+                _alertIsUsageWarning
+                    ? $"WEEKLY CODEX LIMIT · {_alertUsageThreshold}% SAFETY ALERT"
+                    : $"WEEKLY CODEX LIMIT · DAY {_alertCycleDay}",
                 -1,
                 ref eyebrow,
                 NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
@@ -914,9 +980,11 @@ internal sealed class TrayApplication : IDisposable
                 Bottom = client.Top + client.Height / 2
             };
             NativeMethods.SelectObject(deviceContext, _alertTitleFont);
-            string titleText = _alertDaysBeforeReset == 2
-                ? "2 days remain in this Codex cycle"
-                : "Tomorrow is your Codex weekly reset";
+            string titleText = _alertIsUsageWarning
+                ? $"Only {FormatPercentage(_alertRemainingPercent)}% of your weekly limit remains"
+                : _alertDaysBeforeReset == 2
+                    ? "2 days remain in this Codex cycle"
+                    : "Tomorrow is your Codex weekly reset";
             NativeMethods.DrawText(
                 deviceContext,
                 titleText,
@@ -952,7 +1020,9 @@ internal sealed class TrayApplication : IDisposable
             NativeMethods.SelectObject(deviceContext, _alertBodyFont);
             NativeMethods.DrawText(
                 deviceContext,
-                $"Plan your remaining work. Weekly reset: {_alertReset:dddd, d MMMM 'at' HH:mm}.",
+                _alertIsUsageWarning
+                    ? $"Prioritize your remaining work now. Weekly reset: {_alertReset:dddd, d MMMM 'at' HH:mm}."
+                    : $"Plan your remaining work. Weekly reset: {_alertReset:dddd, d MMMM 'at' HH:mm}.",
                 -1,
                 ref body,
                 NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtWordBreak);
@@ -969,6 +1039,13 @@ internal sealed class TrayApplication : IDisposable
         if (_alertWindow == 0)
         {
             return;
+        }
+
+        if (_alertVisible)
+        {
+            ActivityLog.Write(_alertIsUsageWarning
+                ? $"Closed {_alertUsageThreshold}% safety alert."
+                : $"Closed day-{_alertCycleDay} alert.");
         }
 
         _alertVisible = false;
@@ -998,6 +1075,9 @@ internal sealed class TrayApplication : IDisposable
                 break;
             case LaunchCommandKind.TestDay7:
                 ShowTestAlert(7);
+                break;
+            case LaunchCommandKind.TestUsage95:
+                ShowTestUsageWarning();
                 break;
             default:
                 ShowSettings();

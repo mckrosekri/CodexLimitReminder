@@ -27,12 +27,15 @@ internal static class Program
         {
             string executablePath = Environment.ProcessPath
                 ?? throw new InvalidOperationException("The application executable path could not be determined.");
+            ActivityLog.Write($"Primary process started ({command.Kind}) from {executablePath}.");
             StartupRegistration.Apply(enabled: true, executablePath);
+            ActivityLog.Write("Repaired HKCU Run and Startup-folder launch entries.");
             using var app = new TrayApplication(command);
             return app.Run();
         }
         catch (Exception exception)
         {
+            ActivityLog.Write($"Fatal startup error: {exception}");
             NativeMethods.MessageBox(0, exception.ToString(), "Codex Limit Reminder could not start", NativeMethods.MbIconError);
             return 1;
         }
@@ -44,7 +47,8 @@ internal enum LaunchCommandKind
     Background = 0,
     ShowSettings = 1,
     TestDay6 = 2,
-    TestDay7 = 3
+    TestDay7 = 3,
+    TestUsage95 = 4
 }
 
 internal readonly record struct LaunchCommand(LaunchCommandKind Kind)
@@ -59,6 +63,11 @@ internal readonly record struct LaunchCommand(LaunchCommandKind Kind)
         if (args.Any(value => value.Equals("--test-day-7", StringComparison.OrdinalIgnoreCase)))
         {
             return new(LaunchCommandKind.TestDay7);
+        }
+
+        if (args.Any(value => value.Equals("--test-usage-95", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new(LaunchCommandKind.TestUsage95);
         }
 
         if (args.Any(value => value.Equals("--show-settings", StringComparison.OrdinalIgnoreCase)))

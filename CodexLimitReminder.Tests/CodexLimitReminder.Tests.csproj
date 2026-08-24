@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="..\CodexLimitReminder\AppSettings.cs" Link="AppSettings.cs" />
     <Compile Include="..\CodexLimitReminder\ReminderScheduler.cs" Link="ReminderScheduler.cs" />
+    <Compile Include="..\CodexLimitReminder\UsageWarningScheduler.cs" Link="UsageWarningScheduler.cs" />
     <Compile Include="..\CodexLimitReminder\WeeklyRateLimit.cs" Link="WeeklyRateLimit.cs" />
     <Compile Include="..\CodexLimitReminder\CodexRateLimitParser.cs" Link="CodexRateLimitParser.cs" />
     <Compile Include="..\CodexLimitReminder\StartupRegistration.cs" Link="StartupRegistration.cs" />

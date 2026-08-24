@@ -13,6 +13,12 @@ var tests = new (string Name, Action Run)[]
     ("a missed previous-day reminder is not backfilled", PreviousDayIsNotBackfilled),
     ("next reminders are returned in day 6 then day 7 order", NextReminderOrder),
     ("no future cycle is invented after both reminders", NoFutureCycleIsInvented),
+    ("80 percent usage triggers a safety alert", UsageWarningAtEightyPercent),
+    ("usage below 80 percent does not alert", UsageBelowEightyDoesNotWarn),
+    ("95 percent usage skips the lower safety alert", UsageWarningAtNinetyFivePercent),
+    ("95 percent usage alerts after the 80 percent warning", UsageWarningEscalatesToNinetyFivePercent),
+    ("a usage safety alert is not repeated", UsageWarningDoesNotRepeat),
+    ("a new reset permits new usage safety alerts", NewResetPermitsUsageWarning),
     ("startup command is quoted and windowless", StartupCommandIsQuoted),
     ("startup-folder wrapper is hidden and quoted", StartupFolderWrapperIsHiddenAndQuoted)
 };
@@ -39,6 +45,7 @@ static AppSettings Settings(string reminderTime = "09:00", string lastKey = "") 
     TimeSpan.Parse(reminderTime),
     true,
     lastKey,
+    string.Empty,
     0,
     null,
     null);
@@ -153,6 +160,52 @@ static void NoFutureCycleIsInvented()
 {
     DateTime now = new(2026, 8, 20, 9, 1, 0);
     Equal(null, ReminderScheduler.FindNext(Settings(), Limit(), now));
+}
+
+static void UsageWarningAtEightyPercent()
+{
+    UsageWarningOccurrence? warning = UsageWarningScheduler.FindDue(Settings(), Limit() with { UsedPercent = 80 });
+    NotNull(warning);
+    Equal(80, warning!.UsedThreshold);
+}
+
+static void UsageBelowEightyDoesNotWarn()
+{
+    Equal(null, UsageWarningScheduler.FindDue(Settings(), Limit() with { UsedPercent = 79.9 }));
+}
+
+static void UsageWarningAtNinetyFivePercent()
+{
+    UsageWarningOccurrence? warning = UsageWarningScheduler.FindDue(Settings(), Limit() with { UsedPercent = 99 });
+    NotNull(warning);
+    Equal(95, warning!.UsedThreshold);
+}
+
+static void UsageWarningEscalatesToNinetyFivePercent()
+{
+    WeeklyRateLimit limit = Limit() with { UsedPercent = 80 };
+    UsageWarningOccurrence first = UsageWarningScheduler.FindDue(Settings(), limit)!;
+    AppSettings acknowledged = Settings() with { LastUsageWarningKey = first.Key };
+    UsageWarningOccurrence? escalated = UsageWarningScheduler.FindDue(acknowledged, limit with { UsedPercent = 95 });
+    NotNull(escalated);
+    Equal(95, escalated!.UsedThreshold);
+}
+
+static void UsageWarningDoesNotRepeat()
+{
+    WeeklyRateLimit limit = Limit() with { UsedPercent = 96 };
+    UsageWarningOccurrence warning = UsageWarningScheduler.FindDue(Settings(), limit)!;
+    AppSettings acknowledged = Settings() with { LastUsageWarningKey = warning.Key };
+    Equal(null, UsageWarningScheduler.FindDue(acknowledged, limit));
+}
+
+static void NewResetPermitsUsageWarning()
+{
+    WeeklyRateLimit first = Limit() with { UsedPercent = 96 };
+    UsageWarningOccurrence warning = UsageWarningScheduler.FindDue(Settings(), first)!;
+    AppSettings acknowledged = Settings() with { LastUsageWarningKey = warning.Key };
+    WeeklyRateLimit next = first with { ResetsAtUnixSeconds = first.ResetsAtUnixSeconds + 7 * 24 * 60 * 60 };
+    NotNull(UsageWarningScheduler.FindDue(acknowledged, next));
 }
 
 static void StartupCommandIsQuoted()

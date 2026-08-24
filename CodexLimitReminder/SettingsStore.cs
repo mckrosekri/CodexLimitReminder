@@ -26,6 +26,7 @@ internal static class SettingsStore
             TimeSpan.FromMinutes(ReadInt(key, "ReminderMinutes", (int)defaults.ReminderTime.TotalMinutes, 0, 1439)),
             setupVersion == CurrentSetupVersion && ReadInt(key, "Configured", 0, 0, 1) == 1,
             key.GetValue("LastReminderKey") as string ?? string.Empty,
+            key.GetValue("LastUsageWarningKey") as string ?? string.Empty,
             ReadLong(key, "LastKnownResetUnixSeconds", 0),
             usedPercent,
             key.GetValue("LastKnownPlanType") as string);
@@ -38,6 +39,7 @@ internal static class SettingsStore
         key.SetValue("ReminderMinutes", (int)settings.ReminderTime.TotalMinutes, RegistryValueKind.DWord);
         key.SetValue("Configured", settings.IsConfigured ? 1 : 0, RegistryValueKind.DWord);
         key.SetValue("LastReminderKey", settings.LastReminderKey, RegistryValueKind.String);
+        key.SetValue("LastUsageWarningKey", settings.LastUsageWarningKey, RegistryValueKind.String);
         key.SetValue("LastKnownResetUnixSeconds", settings.LastKnownResetUnixSeconds, RegistryValueKind.QWord);
         if (settings.LastKnownUsedPercent is double usedPercent)
         {
