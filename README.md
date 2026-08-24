@@ -9,7 +9,7 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 - Reads the exact weekly reset and current usage from your signed-in local Codex installation.
 - Only one setup choice: the morning notification time.
 - Refreshes hourly, retries automatically after connection problems, and keeps the last known reset offline.
-- Starts quietly at Windows sign-in and repairs its own startup entry whenever the app launches.
+- Starts quietly at Windows sign-in through two independent per-user triggers and repairs both whenever the app launches.
 - Native single-file x64 executable with no installer framework or runtime bundle.
 - Stores only the notification time, reminder deduplication key, and last Codex status in the current user's registry.
 
@@ -21,7 +21,7 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 2. Extract the ZIP.
 3. Right-click `install.ps1`, choose **Run with PowerShell**, and follow the first-run settings window.
 
-The installer copies the app to `%LOCALAPPDATA%\Programs\CodexLimitReminder`, creates a current-user startup entry, and opens the settings window. The app also re-creates that entry on every primary launch, so startup behavior persists independently of the installer. The startup target is the GUI-subsystem executable itself, so Windows does not flash a console.
+The installer copies the app to `%LOCALAPPDATA%\Programs\CodexLimitReminder`, creates current-user startup triggers, and opens the settings window. The app re-creates both triggers on every primary launch: an HKCU Run value and a Startup-folder `wscript.exe` wrapper. The wrapper launches the GUI-subsystem executable hidden, so neither path flashes a console.
 
 You can also run `CodexLimitReminder.exe` directly without installing it. Launching a portable copy once enables quiet startup with Windows automatically.
 
@@ -62,6 +62,7 @@ Quiet startup uses:
 
 ```text
 HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run\CodexLimitReminder
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CodexLimitReminder.vbs
 ```
 
 ## Uninstall

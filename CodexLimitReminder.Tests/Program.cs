@@ -13,7 +13,8 @@ var tests = new (string Name, Action Run)[]
     ("a missed previous-day reminder is not backfilled", PreviousDayIsNotBackfilled),
     ("next reminders are returned in day 6 then day 7 order", NextReminderOrder),
     ("no future cycle is invented after both reminders", NoFutureCycleIsInvented),
-    ("startup command is quoted and windowless", StartupCommandIsQuoted)
+    ("startup command is quoted and windowless", StartupCommandIsQuoted),
+    ("startup-folder wrapper is hidden and quoted", StartupFolderWrapperIsHiddenAndQuoted)
 };
 
 int failures = 0;
@@ -160,6 +161,12 @@ static void StartupCommandIsQuoted()
     Equal("\"C:\\Program Files\\CodexLimitReminder\\CodexLimitReminder.exe\" --background", command);
 }
 
+static void StartupFolderWrapperIsHiddenAndQuoted()
+{
+    string script = StartupRegistration.BuildStartupScript(@"C:\Program Files\CodexLimitReminder\CodexLimitReminder.exe");
+    Contains("shell.Run \"\"\"C:\\Program Files\\CodexLimitReminder\\CodexLimitReminder.exe\"\" --background\", 0, False", script);
+}
+
 static void Equal<T>(T expected, T actual)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
@@ -173,6 +180,14 @@ static void NotNull(object? value)
     if (value is null)
     {
         throw new InvalidOperationException("Expected a value, got null.");
+    }
+}
+
+static void Contains(string expected, string actual)
+{
+    if (!actual.Contains(expected, StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException($"Expected to find '{expected}'.");
     }
 }
 

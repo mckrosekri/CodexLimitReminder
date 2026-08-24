@@ -991,6 +991,8 @@ internal sealed class TrayApplication : IDisposable
     {
         switch (command)
         {
+            case LaunchCommandKind.Background:
+                break;
             case LaunchCommandKind.TestDay6:
                 ShowTestAlert(6);
                 break;
