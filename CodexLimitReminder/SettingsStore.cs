@@ -17,19 +17,10 @@ internal static class SettingsStore
 
         AppSettings defaults = AppSettings.Default;
         int setupVersion = ReadInt(key, "SetupVersion", 0, 0, CurrentSetupVersion);
-        object? usedPercentValue = key.GetValue("LastKnownUsedPercent");
-        double? usedPercent = usedPercentValue is string text &&
-                              double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsed)
-            ? parsed
-            : null;
         return new AppSettings(
             TimeSpan.FromMinutes(ReadInt(key, "ReminderMinutes", (int)defaults.ReminderTime.TotalMinutes, 0, 1439)),
             setupVersion == CurrentSetupVersion && ReadInt(key, "Configured", 0, 0, 1) == 1,
-            key.GetValue("LastReminderKey") as string ?? string.Empty,
-            key.GetValue("LastUsageWarningKey") as string ?? string.Empty,
-            ReadLong(key, "LastKnownResetUnixSeconds", 0),
-            usedPercent,
-            key.GetValue("LastKnownPlanType") as string);
+            key.GetValue("LastDailySummaryDate") as string ?? string.Empty);
     }
 
     public static void Save(AppSettings settings)
@@ -38,27 +29,13 @@ internal static class SettingsStore
         key.SetValue("SetupVersion", CurrentSetupVersion, RegistryValueKind.DWord);
         key.SetValue("ReminderMinutes", (int)settings.ReminderTime.TotalMinutes, RegistryValueKind.DWord);
         key.SetValue("Configured", settings.IsConfigured ? 1 : 0, RegistryValueKind.DWord);
-        key.SetValue("LastReminderKey", settings.LastReminderKey, RegistryValueKind.String);
-        key.SetValue("LastUsageWarningKey", settings.LastUsageWarningKey, RegistryValueKind.String);
-        key.SetValue("LastKnownResetUnixSeconds", settings.LastKnownResetUnixSeconds, RegistryValueKind.QWord);
-        if (settings.LastKnownUsedPercent is double usedPercent)
-        {
-            key.SetValue("LastKnownUsedPercent", usedPercent.ToString(System.Globalization.CultureInfo.InvariantCulture), RegistryValueKind.String);
-        }
-        else
-        {
-            key.DeleteValue("LastKnownUsedPercent", throwOnMissingValue: false);
-        }
+        key.SetValue("LastDailySummaryDate", settings.LastDailySummaryDate, RegistryValueKind.String);
 
-        if (string.IsNullOrWhiteSpace(settings.LastKnownPlanType))
-        {
-            key.DeleteValue("LastKnownPlanType", throwOnMissingValue: false);
-        }
-        else
-        {
-            key.SetValue("LastKnownPlanType", settings.LastKnownPlanType, RegistryValueKind.String);
-        }
-
+        key.DeleteValue("LastReminderKey", throwOnMissingValue: false);
+        key.DeleteValue("LastUsageWarningKey", throwOnMissingValue: false);
+        key.DeleteValue("LastKnownResetUnixSeconds", throwOnMissingValue: false);
+        key.DeleteValue("LastKnownUsedPercent", throwOnMissingValue: false);
+        key.DeleteValue("LastKnownPlanType", throwOnMissingValue: false);
         key.DeleteValue("ResetDay", throwOnMissingValue: false);
         key.DeleteValue("ResetMinutes", throwOnMissingValue: false);
         key.DeleteValue("StartWithWindows", throwOnMissingValue: false);
@@ -71,9 +48,4 @@ internal static class SettingsStore
         return Math.Clamp(parsed, min, max);
     }
 
-    private static long ReadLong(RegistryKey key, string name, long fallback)
-    {
-        object? value = key.GetValue(name);
-        return value is long integer ? integer : fallback;
-    }
 }

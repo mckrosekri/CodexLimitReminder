@@ -5,7 +5,7 @@ namespace CodexLimitReminder;
 
 internal static class CodexAppServerClient
 {
-    public static async Task<WeeklyRateLimit> ReadWeeklyLimitAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    public static async Task<IReadOnlyList<CodexRateLimitWindow>> ReadRateLimitsAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         string executable = CodexExecutableLocator.Find();
         var startInfo = new ProcessStartInfo
@@ -52,7 +52,7 @@ internal static class CodexAppServerClient
                 using JsonDocument document = JsonDocument.Parse(line);
                 if (document.RootElement.TryGetProperty("id", out JsonElement id) && id.TryGetInt32(out int value) && value == 2)
                 {
-                    return CodexRateLimitParser.ParseResponse(line);
+                    return CodexRateLimitParser.ParseAllResponse(line);
                 }
             }
 

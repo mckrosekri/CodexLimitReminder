@@ -2,23 +2,25 @@ using CodexLimitReminder;
 
 var tests = new (string Name, Action Run)[]
 {
-    ("parser reads the main Codex weekly window", ParserReadsMainCodexWeeklyWindow),
-    ("parser uses a weekly secondary window when primary is short", ParserUsesWeeklySecondaryWindow),
-    ("parser rejects responses without a weekly Codex limit", ParserRejectsMissingWeeklyWindow),
-    ("usage calculates the remaining weekly percentage", UsageCalculatesRemainingPercentage),
+    ("parser reads every General and Spark clock", ParserReadsAllClocks),
+    ("parser rejects responses without limits", ParserRejectsMissingLimits),
+    ("usage calculates remaining percentage", UsageCalculatesRemainingPercentage),
     ("usage percentages are safely clamped", UsagePercentagesAreClamped),
-    ("day 6 is due two mornings before the exact Codex reset", Day6IsDue),
-    ("day 7 is due one morning before the exact Codex reset", Day7IsDue),
-    ("a reminder is not repeated after its key is saved", ReminderDoesNotRepeat),
-    ("a missed previous-day reminder is not backfilled", PreviousDayIsNotBackfilled),
-    ("next reminders are returned in day 6 then day 7 order", NextReminderOrder),
-    ("no future cycle is invented after both reminders", NoFutureCycleIsInvented),
-    ("80 percent usage triggers a safety alert", UsageWarningAtEightyPercent),
-    ("usage below 80 percent does not alert", UsageBelowEightyDoesNotWarn),
-    ("95 percent usage skips the lower safety alert", UsageWarningAtNinetyFivePercent),
-    ("95 percent usage alerts after the 80 percent warning", UsageWarningEscalatesToNinetyFivePercent),
-    ("a usage safety alert is not repeated", UsageWarningDoesNotRepeat),
-    ("a new reset permits new usage safety alerts", NewResetPermitsUsageWarning),
+    ("daily summary is due after configured time", DailySummaryIsDue),
+    ("daily summary waits until configured time", DailySummaryWaitsUntilTime),
+    ("daily summary is not repeated", DailySummaryDoesNotRepeat),
+    ("next daily summary uses today then tomorrow", NextDailySummaryIsCorrect),
+    ("weekly usage below 50 percent does not alert", UsageBelowFiftyDoesNotWarn),
+    ("50 percent weekly usage triggers an alert", UsageWarningAtFiftyPercent),
+    ("first observation at 96 percent selects 95", UsageWarningSelectsHighestCrossedThreshold),
+    ("weekly warnings escalate from 50 to 75", UsageWarningEscalates),
+    ("weekly warning is not repeated", UsageWarningDoesNotRepeat),
+    ("five-hour clocks do not trigger weekly warnings", FiveHourClockDoesNotWarn),
+    ("major rolling recovery is detected", MajorRecoveryIsDetected),
+    ("minor usage movement is not called a recovery", MinorDropIsNotRecovery),
+    ("reset advance with near-full recovery is detected", ResetAdvanceRecoveryIsDetected),
+    ("warning thresholds restart after recovery", ThresholdRestartsAfterRecovery),
+    ("multiple limit states remain independent", MultipleLimitStatesAreIndependent),
     ("startup command is quoted and windowless", StartupCommandIsQuoted),
     ("startup-folder wrapper is hidden and quoted", StartupFolderWrapperIsHiddenAndQuoted)
 };
@@ -41,183 +43,190 @@ foreach ((string name, Action run) in tests)
 Console.WriteLine($"\n{tests.Length - failures}/{tests.Length} tests passed.");
 return failures == 0 ? 0 : 1;
 
-static AppSettings Settings(string reminderTime = "09:00", string lastKey = "") => new(
+static AppSettings Settings(string reminderTime = "09:00", string lastDailyDate = "") => new(
     TimeSpan.Parse(reminderTime),
     true,
-    lastKey,
-    string.Empty,
-    0,
-    null,
-    null);
+    lastDailyDate);
 
-static WeeklyRateLimit Limit() => new(
+static CodexRateLimitWindow General(double used = 7, long? reset = null) => new(
     "codex",
-    "Codex",
-    7,
+    null,
+    "primary",
+    used,
     10_080,
-    new DateTimeOffset(2026, 8, 21, 17, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds(),
+    reset ?? new DateTimeOffset(2026, 9, 5, 21, 33, 0, TimeSpan.Zero).ToUnixTimeSeconds(),
     "pro");
 
-static void ParserReadsMainCodexWeeklyWindow()
+static CodexRateLimitWindow SparkWeekly(double used = 0, long? reset = null) => new(
+    "codex_bengalfox",
+    "GPT-5.3-Codex-Spark",
+    "secondary",
+    used,
+    10_080,
+    reset ?? new DateTimeOffset(2026, 9, 6, 12, 29, 0, TimeSpan.Zero).ToUnixTimeSeconds(),
+    "pro");
+
+static CodexRateLimitWindow SparkFiveHour(double used = 0) => new(
+    "codex_bengalfox",
+    "GPT-5.3-Codex-Spark",
+    "primary",
+    used,
+    300,
+    new DateTimeOffset(2026, 8, 30, 17, 29, 0, TimeSpan.Zero).ToUnixTimeSeconds(),
+    "pro");
+
+static void ParserReadsAllClocks()
 {
     const string json = """
-        {"id":2,"result":{"rateLimits":{"limitId":"codex","planType":"pro","primary":{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1787333400}},"rateLimitsByLimitId":{"codex":{"limitId":"codex","limitName":"Codex","planType":"pro","primary":{"usedPercent":7,"windowDurationMins":10080,"resetsAt":1787333400}},"codex_bengalfox":{"limitId":"codex_bengalfox","primary":{"usedPercent":99,"windowDurationMins":10080,"resetsAt":1787333500}}}}}
+        {"id":2,"result":{"rateLimitsByLimitId":{"codex":{"limitId":"codex","planType":"pro","primary":{"usedPercent":3,"windowDurationMins":10080,"resetsAt":1788643995}},"codex_bengalfox":{"limitId":"codex_bengalfox","limitName":"GPT-5.3-Codex-Spark","planType":"pro","primary":{"usedPercent":0,"windowDurationMins":300,"resetsAt":1788103925},"secondary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":1788705125}}}}}
         """;
 
-    WeeklyRateLimit result = CodexRateLimitParser.ParseResponse(json);
-    Equal("codex", result.LimitId);
-    Equal(7d, result.UsedPercent);
-    Equal(10_080, result.WindowDurationMinutes);
-    Equal(1787333400L, result.ResetsAtUnixSeconds);
-    Equal("pro", result.PlanType);
+    IReadOnlyList<CodexRateLimitWindow> limits = CodexRateLimitParser.ParseAllResponse(json);
+    Equal(3, limits.Count);
+    Equal("codex", limits[0].LimitId);
+    Equal(10_080, limits[0].WindowDurationMinutes);
+    Equal(300, limits[1].WindowDurationMinutes);
+    Equal("GPT-5.3-Codex-Spark", limits[2].LimitName);
+    Equal(10_080, limits[2].WindowDurationMinutes);
 }
 
-static void ParserUsesWeeklySecondaryWindow()
+static void ParserRejectsMissingLimits()
 {
-    const string json = """
-        {"id":2,"result":{"rateLimitsByLimitId":{"codex":{"limitId":"codex","primary":{"usedPercent":10,"windowDurationMins":300,"resetsAt":1787000000},"secondary":{"usedPercent":25,"windowDurationMins":10080,"resetsAt":1787333400}}}}}
-        """;
-
-    WeeklyRateLimit result = CodexRateLimitParser.ParseResponse(json);
-    Equal(25d, result.UsedPercent);
-    Equal(10_080, result.WindowDurationMinutes);
-}
-
-static void ParserRejectsMissingWeeklyWindow()
-{
-    const string json = """
-        {"id":2,"result":{"rateLimitsByLimitId":{"codex":{"limitId":"codex","primary":{"usedPercent":10,"windowDurationMins":300,"resetsAt":1787000000}}}}}
-        """;
-
-    Throws<InvalidOperationException>(() => CodexRateLimitParser.ParseResponse(json));
+    Throws<InvalidOperationException>(() => CodexRateLimitParser.ParseAllResponse("{\"id\":2,\"result\":{}}"));
 }
 
 static void UsageCalculatesRemainingPercentage()
 {
-    WeeklyRateLimit limit = Limit();
+    CodexRateLimitWindow limit = General();
     Equal(7d, limit.NormalizedUsedPercent);
     Equal(93d, limit.RemainingPercent);
+    Equal(true, limit.IsWeekly);
+    Equal("weekly", limit.WindowLabel);
 }
 
 static void UsagePercentagesAreClamped()
 {
-    WeeklyRateLimit overLimit = Limit() with { UsedPercent = 125 };
-    WeeklyRateLimit belowZero = Limit() with { UsedPercent = -5 };
-    WeeklyRateLimit invalid = Limit() with { UsedPercent = double.NaN };
-    Equal(100d, overLimit.NormalizedUsedPercent);
-    Equal(0d, overLimit.RemainingPercent);
-    Equal(0d, belowZero.NormalizedUsedPercent);
-    Equal(100d, belowZero.RemainingPercent);
-    Equal(0d, invalid.NormalizedUsedPercent);
-    Equal(100d, invalid.RemainingPercent);
+    Equal(100d, General(125).NormalizedUsedPercent);
+    Equal(0d, General(125).RemainingPercent);
+    Equal(0d, General(-5).NormalizedUsedPercent);
+    Equal(100d, General(double.NaN).RemainingPercent);
 }
 
-static void Day6IsDue()
+static void DailySummaryIsDue()
 {
-    DateTime now = new(2026, 8, 19, 9, 0, 0);
-    ReminderOccurrence? due = ReminderScheduler.FindDue(Settings(), Limit(), now);
+    DailyReminderOccurrence? due = DailyReminderScheduler.FindDue(Settings(), new DateTime(2026, 8, 30, 9, 1, 0));
     NotNull(due);
-    Equal(6, due!.CycleDay);
-    Equal(2, due.DaysBeforeReset);
+    Equal("2026-08-30", due!.DateKey);
 }
 
-static void Day7IsDue()
+static void DailySummaryWaitsUntilTime()
 {
-    DateTime now = new(2026, 8, 20, 10, 0, 0);
-    ReminderOccurrence? due = ReminderScheduler.FindDue(Settings(), Limit(), now);
-    NotNull(due);
-    Equal(7, due!.CycleDay);
-    Equal(1, due.DaysBeforeReset);
+    Equal(null, DailyReminderScheduler.FindDue(Settings(), new DateTime(2026, 8, 30, 8, 59, 59)));
 }
 
-static void ReminderDoesNotRepeat()
+static void DailySummaryDoesNotRepeat()
 {
-    DateTime now = new(2026, 8, 19, 9, 5, 0);
-    ReminderOccurrence due = ReminderScheduler.FindDue(Settings(), Limit(), now)!;
-    Equal(null, ReminderScheduler.FindDue(Settings(lastKey: due.Key), Limit(), now));
+    Equal(null, DailyReminderScheduler.FindDue(Settings(lastDailyDate: "2026-08-30"), new DateTime(2026, 8, 30, 12, 0, 0)));
 }
 
-static void PreviousDayIsNotBackfilled()
+static void NextDailySummaryIsCorrect()
 {
-    DateTime now = new(2026, 8, 20, 8, 30, 0);
-    Equal(null, ReminderScheduler.FindDue(Settings(), Limit(), now));
+    Equal(new DateTime(2026, 8, 30, 9, 0, 0), DailyReminderScheduler.FindNext(Settings(), new DateTime(2026, 8, 30, 8, 0, 0)));
+    Equal(new DateTime(2026, 8, 31, 9, 0, 0), DailyReminderScheduler.FindNext(Settings(), new DateTime(2026, 8, 30, 9, 1, 0)));
 }
 
-static void NextReminderOrder()
+static void UsageBelowFiftyDoesNotWarn()
 {
-    AppSettings settings = Settings();
-    WeeklyRateLimit limit = Limit();
-    DateTime now = new(2026, 8, 18, 12, 0, 0);
-    ReminderOccurrence first = ReminderScheduler.FindNext(settings, limit, now)!;
-    ReminderOccurrence second = ReminderScheduler.FindNext(settings, limit, first.DueLocal.AddSeconds(1))!;
-    Equal(6, first.CycleDay);
-    Equal(new DateTime(2026, 8, 19, 9, 0, 0), first.DueLocal);
-    Equal(7, second.CycleDay);
-    Equal(new DateTime(2026, 8, 20, 9, 0, 0), second.DueLocal);
+    LimitMonitorResult result = LimitMonitor.Evaluate([], [General(49.9)]);
+    Equal(0, result.Events.Count);
 }
 
-static void NoFutureCycleIsInvented()
+static void UsageWarningAtFiftyPercent()
 {
-    DateTime now = new(2026, 8, 20, 9, 1, 0);
-    Equal(null, ReminderScheduler.FindNext(Settings(), Limit(), now));
+    LimitMonitorEvent item = Single(LimitMonitor.Evaluate([], [General(50)]).Events);
+    Equal(LimitMonitorEventKind.Threshold, item.Kind);
+    Equal(50, item.Threshold);
 }
 
-static void UsageWarningAtEightyPercent()
+static void UsageWarningSelectsHighestCrossedThreshold()
 {
-    UsageWarningOccurrence? warning = UsageWarningScheduler.FindDue(Settings(), Limit() with { UsedPercent = 80 });
-    NotNull(warning);
-    Equal(80, warning!.UsedThreshold);
+    LimitMonitorEvent item = Single(LimitMonitor.Evaluate([], [General(96)]).Events);
+    Equal(95, item.Threshold);
 }
 
-static void UsageBelowEightyDoesNotWarn()
+static void UsageWarningEscalates()
 {
-    Equal(null, UsageWarningScheduler.FindDue(Settings(), Limit() with { UsedPercent = 79.9 }));
-}
-
-static void UsageWarningAtNinetyFivePercent()
-{
-    UsageWarningOccurrence? warning = UsageWarningScheduler.FindDue(Settings(), Limit() with { UsedPercent = 99 });
-    NotNull(warning);
-    Equal(95, warning!.UsedThreshold);
-}
-
-static void UsageWarningEscalatesToNinetyFivePercent()
-{
-    WeeklyRateLimit limit = Limit() with { UsedPercent = 80 };
-    UsageWarningOccurrence first = UsageWarningScheduler.FindDue(Settings(), limit)!;
-    AppSettings acknowledged = Settings() with { LastUsageWarningKey = first.Key };
-    UsageWarningOccurrence? escalated = UsageWarningScheduler.FindDue(acknowledged, limit with { UsedPercent = 95 });
-    NotNull(escalated);
-    Equal(95, escalated!.UsedThreshold);
+    LimitMonitorResult first = LimitMonitor.Evaluate([], [General(50)]);
+    LimitMonitorEvent item = Single(LimitMonitor.Evaluate(first.States, [General(76)]).Events);
+    Equal(75, item.Threshold);
 }
 
 static void UsageWarningDoesNotRepeat()
 {
-    WeeklyRateLimit limit = Limit() with { UsedPercent = 96 };
-    UsageWarningOccurrence warning = UsageWarningScheduler.FindDue(Settings(), limit)!;
-    AppSettings acknowledged = Settings() with { LastUsageWarningKey = warning.Key };
-    Equal(null, UsageWarningScheduler.FindDue(acknowledged, limit));
+    LimitMonitorResult first = LimitMonitor.Evaluate([], [General(76)]);
+    Equal(0, LimitMonitor.Evaluate(first.States, [General(77)]).Events.Count);
 }
 
-static void NewResetPermitsUsageWarning()
+static void FiveHourClockDoesNotWarn()
 {
-    WeeklyRateLimit first = Limit() with { UsedPercent = 96 };
-    UsageWarningOccurrence warning = UsageWarningScheduler.FindDue(Settings(), first)!;
-    AppSettings acknowledged = Settings() with { LastUsageWarningKey = warning.Key };
-    WeeklyRateLimit next = first with { ResetsAtUnixSeconds = first.ResetsAtUnixSeconds + 7 * 24 * 60 * 60 };
-    NotNull(UsageWarningScheduler.FindDue(acknowledged, next));
+    Equal(0, LimitMonitor.Evaluate([], [SparkFiveHour(99)]).Events.Count);
+}
+
+static void MajorRecoveryIsDetected()
+{
+    IReadOnlyList<MonitoredLimitState> previous = [new(General(43), 0)];
+    LimitMonitorEvent item = Single(LimitMonitor.Evaluate(previous, [General(0, General().ResetsAtUnixSeconds + 2 * 24 * 60 * 60)]).Events);
+    Equal(LimitMonitorEventKind.Recovery, item.Kind);
+    Equal(43d, item.RecoveredPercent);
+}
+
+static void MinorDropIsNotRecovery()
+{
+    IReadOnlyList<MonitoredLimitState> previous = [new(General(43), 0)];
+    Equal(0, LimitMonitor.Evaluate(previous, [General(39)]).Events.Count);
+}
+
+static void ResetAdvanceRecoveryIsDetected()
+{
+    IReadOnlyList<MonitoredLimitState> previous = [new(General(5), 0)];
+    long later = General().ResetsAtUnixSeconds + 24 * 60 * 60;
+    Equal(LimitMonitorEventKind.Recovery, Single(LimitMonitor.Evaluate(previous, [General(0, later)]).Events).Kind);
+}
+
+static void ThresholdRestartsAfterRecovery()
+{
+    LimitMonitorResult warned = LimitMonitor.Evaluate([], [General(95)]);
+    long later = General().ResetsAtUnixSeconds + 2 * 24 * 60 * 60;
+    LimitMonitorResult recovered = LimitMonitor.Evaluate(warned.States, [General(0, later)]);
+    LimitMonitorEvent item = Single(LimitMonitor.Evaluate(recovered.States, [General(52, later)]).Events);
+    Equal(50, item.Threshold);
+}
+
+static void MultipleLimitStatesAreIndependent()
+{
+    LimitMonitorResult result = LimitMonitor.Evaluate([], [General(51), SparkFiveHour(99), SparkWeekly(76)]);
+    Equal(3, result.States.Count);
+    Equal(2, result.Events.Count);
+    Equal(50, result.Events[0].Threshold);
+    Equal(75, result.Events[1].Threshold);
 }
 
 static void StartupCommandIsQuoted()
 {
-    string command = StartupRegistration.BuildCommand(@"C:\Program Files\CodexLimitReminder\CodexLimitReminder.exe");
-    Equal("\"C:\\Program Files\\CodexLimitReminder\\CodexLimitReminder.exe\" --background", command);
+    Equal("\"C:\\Program Files\\CodexLimitReminder\\CodexLimitReminder.exe\" --background",
+        StartupRegistration.BuildCommand(@"C:\Program Files\CodexLimitReminder\CodexLimitReminder.exe"));
 }
 
 static void StartupFolderWrapperIsHiddenAndQuoted()
 {
     string script = StartupRegistration.BuildStartupScript(@"C:\Program Files\CodexLimitReminder\CodexLimitReminder.exe");
     Contains("shell.Run \"\"\"C:\\Program Files\\CodexLimitReminder\\CodexLimitReminder.exe\"\" --background\", 0, False", script);
+}
+
+static T Single<T>(IReadOnlyList<T> values)
+{
+    Equal(1, values.Count);
+    return values[0];
 }
 
 static void Equal<T>(T expected, T actual)

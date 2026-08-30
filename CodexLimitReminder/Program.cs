@@ -46,28 +46,19 @@ internal enum LaunchCommandKind
 {
     Background = 0,
     ShowSettings = 1,
-    TestDay6 = 2,
-    TestDay7 = 3,
-    TestUsage95 = 4
+    TestSummary = 2
 }
 
 internal readonly record struct LaunchCommand(LaunchCommandKind Kind)
 {
     public static LaunchCommand Parse(string[] args)
     {
-        if (args.Any(value => value.Equals("--test-day-6", StringComparison.OrdinalIgnoreCase)))
+        if (args.Any(value => value.Equals("--test-summary", StringComparison.OrdinalIgnoreCase) ||
+                              value.Equals("--test-day-6", StringComparison.OrdinalIgnoreCase) ||
+                              value.Equals("--test-day-7", StringComparison.OrdinalIgnoreCase) ||
+                              value.Equals("--test-usage-95", StringComparison.OrdinalIgnoreCase)))
         {
-            return new(LaunchCommandKind.TestDay6);
-        }
-
-        if (args.Any(value => value.Equals("--test-day-7", StringComparison.OrdinalIgnoreCase)))
-        {
-            return new(LaunchCommandKind.TestDay7);
-        }
-
-        if (args.Any(value => value.Equals("--test-usage-95", StringComparison.OrdinalIgnoreCase)))
-        {
-            return new(LaunchCommandKind.TestUsage95);
+            return new(LaunchCommandKind.TestSummary);
         }
 
         if (args.Any(value => value.Equals("--show-settings", StringComparison.OrdinalIgnoreCase)))

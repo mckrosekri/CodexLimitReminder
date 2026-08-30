@@ -12,11 +12,9 @@ internal sealed class TrayApplication : IDisposable
     private const nuint RateRefreshTimerId = 2;
 
     private const int MenuSettings = 100;
-    private const int MenuTestDay6 = 101;
-    private const int MenuTestDay7 = 102;
+    private const int MenuTestSummary = 101;
     private const int MenuExit = 103;
     private const int MenuRefresh = 104;
-    private const int MenuTestUsage95 = 105;
 
     private const int ConnectionStatusControl = 201;
     private const int ResetStatusControl = 202;
@@ -39,7 +37,8 @@ internal sealed class TrayApplication : IDisposable
     private readonly object _refreshLock = new();
     private readonly CancellationTokenSource _shutdown = new();
     private AppSettings _settings;
-    private WeeklyRateLimit? _weeklyLimit;
+    private IReadOnlyList<MonitoredLimitState> _limitStates;
+    private IReadOnlyList<CodexRateLimitWindow> _limits;
     private RateLimitRefreshResult? _pendingRefresh;
     private nint _messageWindow;
     private nint _settingsWindow;
@@ -56,14 +55,11 @@ internal sealed class TrayApplication : IDisposable
     private bool _refreshInProgress;
     private int _refreshFailureCount;
     private string _connectionStatus = "Connecting to Codex…";
-    private int _alertCycleDay = 6;
-    private int _alertDaysBeforeReset = 2;
-    private DateTime _alertReset;
-    private double _alertUsedPercent;
-    private double _alertRemainingPercent;
-    private bool _alertHasUsage;
-    private bool _alertIsUsageWarning;
-    private int _alertUsageThreshold;
+    private string _alertEyebrow = "DAILY CODEX LIMIT SUMMARY";
+    private string _alertTitle = "Your current Codex limits";
+    private string _alertBody = "Live from your signed-in Codex account.";
+    private string _alertLogLabel = "daily summary";
+    private IReadOnlyList<CodexRateLimitWindow> _alertLimits = Array.Empty<CodexRateLimitWindow>();
 
     public TrayApplication(LaunchCommand initialCommand)
     {
@@ -71,17 +67,12 @@ internal sealed class TrayApplication : IDisposable
         _instance = NativeMethods.GetModuleHandle(null);
         _taskbarCreatedMessage = NativeMethods.RegisterWindowMessage("TaskbarCreated");
         _settings = SettingsStore.Load();
+        _limitStates = LimitStateStore.Load();
+        _limits = _limitStates.Select(state => state.Limit).ToArray();
         ActivityLog.Write($"Loaded settings: configured={_settings.IsConfigured}, reminder={FormatTime(_settings.ReminderTime)}.");
-        if (_settings.LastKnownResetUnixSeconds > DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+        if (_limits.Count > 0)
         {
-            _weeklyLimit = new WeeklyRateLimit(
-                "codex",
-                null,
-                _settings.LastKnownUsedPercent ?? 0,
-                7 * 24 * 60,
-                _settings.LastKnownResetUnixSeconds,
-                _settings.LastKnownPlanType);
-            _connectionStatus = "Using saved Codex data while refreshing…";
+            _connectionStatus = $"Using {_limits.Count} saved Codex limits while refreshing…";
         }
 
         RegisterWindowClasses();
@@ -98,23 +89,15 @@ internal sealed class TrayApplication : IDisposable
             0);
 
         AddTrayIcon();
-        EvaluateAndSchedule();
+        EvaluateDailySummary();
 
         if (!_settings.IsConfigured || initialCommand.Kind == LaunchCommandKind.ShowSettings)
         {
             ShowSettings();
         }
-        else if (initialCommand.Kind == LaunchCommandKind.TestDay6)
+        else if (initialCommand.Kind == LaunchCommandKind.TestSummary)
         {
-            ShowTestAlert(6);
-        }
-        else if (initialCommand.Kind == LaunchCommandKind.TestDay7)
-        {
-            ShowTestAlert(7);
-        }
-        else if (initialCommand.Kind == LaunchCommandKind.TestUsage95)
-        {
-            ShowTestUsageWarning();
+            ShowTestSummary();
         }
 
         BeginRateLimitRefresh();
@@ -290,9 +273,7 @@ internal sealed class TrayApplication : IDisposable
             NativeMethods.AppendMenu(menu, NativeMethods.MfString | NativeMethods.MfDefault, MenuSettings, "Settings…");
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuRefresh, "Refresh Codex status");
             NativeMethods.AppendMenu(menu, NativeMethods.MfSeparator, 0, null);
-            NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestDay6, "Test day 6 reminder");
-            NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestDay7, "Test day 7 reminder");
-            NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestUsage95, "Test 95% safety reminder");
+            NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestSummary, "Test daily limit summary");
             NativeMethods.AppendMenu(menu, NativeMethods.MfSeparator, 0, null);
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuExit, "Exit");
 
@@ -322,14 +303,8 @@ internal sealed class TrayApplication : IDisposable
             case MenuSettings:
                 ShowSettings();
                 break;
-            case MenuTestDay6:
-                ShowTestAlert(6);
-                break;
-            case MenuTestDay7:
-                ShowTestAlert(7);
-                break;
-            case MenuTestUsage95:
-                ShowTestUsageWarning();
+            case MenuTestSummary:
+                ShowTestSummary();
                 break;
             case MenuRefresh:
                 BeginRateLimitRefresh();
@@ -401,7 +376,7 @@ internal sealed class TrayApplication : IDisposable
         ApplyFont(title, _titleFont);
         CreateControl(
             "STATIC",
-            "Reads your signed-in Codex weekly limit automatically. Choose only what time the two alerts appear.",
+            "Reads every signed-in Codex limit automatically. Choose only when the daily summary appears.",
             NativeMethods.SsLeft,
             30,
             70,
@@ -414,40 +389,40 @@ internal sealed class TrayApplication : IDisposable
         CreateControl("STATIC", "Codex connection", NativeMethods.SsLeft, 30, 125, 170, 24, window, 0, dpi);
         CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 125, 330, 38, window, ConnectionStatusControl, dpi);
 
-        CreateControl("STATIC", "Weekly reset", NativeMethods.SsLeft, 30, 180, 170, 24, window, 0, dpi);
-        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 180, 330, 38, window, ResetStatusControl, dpi);
+        CreateControl("STATIC", "Live limits", NativeMethods.SsLeft, 30, 180, 170, 24, window, 0, dpi);
+        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 174, 350, 92, window, ResetStatusControl, dpi);
 
-        CreateControl("STATIC", "Weekly usage", NativeMethods.SsLeft, 30, 235, 170, 24, window, 0, dpi);
-        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 235, 330, 38, window, UsageStatusControl, dpi);
+        CreateControl("STATIC", "Protection", NativeMethods.SsLeft, 30, 275, 170, 24, window, 0, dpi);
+        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 215, 270, 350, 46, window, UsageStatusControl, dpi);
 
-        CreateControl("STATIC", "Notification time", NativeMethods.SsLeft, 30, 290, 170, 24, window, 0, dpi);
+        CreateControl("STATIC", "Daily summary time", NativeMethods.SsLeft, 30, 326, 170, 24, window, 0, dpi);
         CreateControl(
             "EDIT",
             string.Empty,
             NativeMethods.EsAutoHScroll | NativeMethods.WsTabStop | NativeMethods.WsBorder,
             215,
-            284,
+            320,
             120,
             30,
             window,
             ReminderTimeControl,
             dpi,
             NativeMethods.WsExClientEdge);
-        CreateControl("STATIC", "24-hour HH:mm", NativeMethods.SsLeft, 350, 290, 190, 24, window, 0, dpi);
+        CreateControl("STATIC", "24-hour HH:mm", NativeMethods.SsLeft, 350, 326, 190, 24, window, 0, dpi);
 
         CreateControl(
             "STATIC",
-            "No API key or reset-day setup. The app connects locally through Codex and starts quietly with Windows.",
+            "No API key or reset-day setup. Rolling recoveries and weekly thresholds are detected automatically.",
             NativeMethods.SsLeft,
             30,
-            333,
+            362,
             525,
             42,
             window,
             0,
             dpi);
 
-        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 30, 382, 525, 44, window, StatusControl, dpi);
+        CreateControl("STATIC", string.Empty, NativeMethods.SsLeft, 30, 410, 525, 36, window, StatusControl, dpi);
 
         CreateControl(
             "BUTTON",
@@ -562,7 +537,7 @@ internal sealed class TrayApplication : IDisposable
         }
 
         _settings = updated;
-        EvaluateAndSchedule();
+        EvaluateDailySummary();
         HideSettings();
     }
 
@@ -589,25 +564,20 @@ internal sealed class TrayApplication : IDisposable
             NativeMethods.GetDlgItem(_settingsWindow, ConnectionStatusControl),
             _connectionStatus);
 
-        if (_weeklyLimit is null)
+        if (_limits.Count == 0)
         {
             NativeMethods.SetWindowText(NativeMethods.GetDlgItem(_settingsWindow, ResetStatusControl), "Waiting for Codex…");
             NativeMethods.SetWindowText(NativeMethods.GetDlgItem(_settingsWindow, UsageStatusControl), "Waiting for Codex…");
             return;
         }
 
-        DateTime resetLocal = _weeklyLimit.ResetsAt.ToLocalTime().DateTime;
+        string liveLimits = string.Join("\r\n", _limits.Select(FormatCompactLimit));
         NativeMethods.SetWindowText(
             NativeMethods.GetDlgItem(_settingsWindow, ResetStatusControl),
-            $"{resetLocal:dddd, d MMM yyyy 'at' HH:mm}");
-
-        string plan = string.IsNullOrWhiteSpace(_weeklyLimit.PlanType)
-            ? string.Empty
-            : $" · {_weeklyLimit.PlanType}";
+            liveLimits);
         NativeMethods.SetWindowText(
             NativeMethods.GetDlgItem(_settingsWindow, UsageStatusControl),
-            $"{FormatPercentage(_weeklyLimit.NormalizedUsedPercent)}% used · " +
-            $"{FormatPercentage(_weeklyLimit.RemainingPercent)}% left{plan} · 7-day window");
+            "Daily summary · weekly alerts at 50/75/90/95% · rolling recovery alerts");
     }
 
     private void UpdateNextReminderText()
@@ -625,34 +595,14 @@ internal sealed class TrayApplication : IDisposable
             return;
         }
 
-        if (_weeklyLimit is null)
-        {
-            NativeMethods.SetWindowText(
-                NativeMethods.GetDlgItem(_settingsWindow, StatusControl),
-                "Waiting for Codex before scheduling the next reminder…");
-            return;
-        }
-
         DateTime now = DateTime.Now;
-        ReminderOccurrence? first = ReminderScheduler.FindNext(_settings, _weeklyLimit, now);
-        if (first is null)
-        {
-            NativeMethods.SetWindowText(
-                NativeMethods.GetDlgItem(_settingsWindow, StatusControl),
-                "No alert remains before this reset. Watching Codex for the next cycle.");
-            return;
-        }
-
-        ReminderOccurrence? second = ReminderScheduler.FindNext(_settings, _weeklyLimit, first.DueLocal.AddSeconds(1));
-        string schedule = second is null
-            ? $"Next: {first.DueLocal:ddd, d MMM 'at' HH:mm}"
-            : $"Next: {first.DueLocal:ddd, d MMM 'at' HH:mm} and {second.DueLocal:ddd, d MMM 'at' HH:mm}";
+        DateTime next = DailyReminderScheduler.FindNext(_settings, now);
         NativeMethods.SetWindowText(
             NativeMethods.GetDlgItem(_settingsWindow, StatusControl),
-            schedule);
+            $"Next daily summary: {next:ddd, d MMM 'at' HH:mm}. Threshold and recovery alerts are immediate.");
     }
 
-    private void EvaluateAndSchedule()
+    private void EvaluateDailySummary()
     {
         if (_messageWindow == 0)
         {
@@ -660,74 +610,67 @@ internal sealed class TrayApplication : IDisposable
         }
 
         NativeMethods.KillTimer(_messageWindow, SchedulerTimerId);
-        if (!_settings.IsConfigured || _weeklyLimit is null)
+        if (!_settings.IsConfigured)
         {
-            UpdateNextReminderText();
-            return;
-        }
-
-        if (_weeklyLimit.ResetsAt <= DateTimeOffset.UtcNow)
-        {
-            BeginRateLimitRefresh();
             UpdateNextReminderText();
             return;
         }
 
         DateTime now = DateTime.Now;
-        ReminderOccurrence? due = ReminderScheduler.FindDue(_settings, _weeklyLimit, now);
-        UsageWarningOccurrence? usageWarning = UsageWarningScheduler.FindDue(_settings, _weeklyLimit);
-        if (due is not null)
+        DailyReminderOccurrence? due = DailyReminderScheduler.FindDue(_settings, now);
+        if (due is not null && _limits.Count > 0)
         {
-            _settings = _settings with
-            {
-                LastReminderKey = due.Key,
-                LastUsageWarningKey = usageWarning?.Key ?? _settings.LastUsageWarningKey
-            };
+            _settings = _settings with { LastDailySummaryDate = due.DateKey };
             SettingsStore.Save(_settings);
-            ActivityLog.Write($"Showing day-{due.CycleDay} alert: {FormatPercentage(_weeklyLimit.NormalizedUsedPercent)}% used, reset {due.ResetLocal:yyyy-MM-dd HH:mm}.");
-            ShowAlert(due);
-        }
-        else if (usageWarning is not null)
-        {
-            _settings = _settings with { LastUsageWarningKey = usageWarning.Key };
-            SettingsStore.Save(_settings);
-            ActivityLog.Write($"Showing {usageWarning.UsedThreshold}% safety alert: {FormatPercentage(_weeklyLimit.NormalizedUsedPercent)}% used, reset {_weeklyLimit.ResetsAt.ToLocalTime():yyyy-MM-dd HH:mm}.");
-            ShowUsageWarning(usageWarning);
+            ActivityLog.Write($"Showing daily summary with {_limits.Count} live limit windows.");
+            ShowLimitAlert(
+                "DAILY CODEX LIMIT SUMMARY",
+                "Your current Codex limits",
+                "Live from your signed-in Codex account. Weekly limits are rolling and may recover in stages.",
+                "daily summary");
         }
 
-        ReminderOccurrence? next = ReminderScheduler.FindNext(_settings, _weeklyLimit, now);
-        if (next is not null)
-        {
-            long milliseconds = (long)Math.Ceiling((next.DueLocal - now).TotalMilliseconds);
-            uint timerDelay = (uint)Math.Clamp(milliseconds, 1000L, (long)uint.MaxValue - 1);
-            NativeMethods.SetTimer(_messageWindow, SchedulerTimerId, timerDelay, 0);
-            ReminderOccurrence? following = ReminderScheduler.FindNext(_settings, _weeklyLimit, next.DueLocal.AddSeconds(1));
-            ActivityLog.Write(following is null
-                ? $"Day alert scheduled for {next.DueLocal:yyyy-MM-dd HH:mm} (day {next.CycleDay})."
-                : $"Day alerts scheduled for {next.DueLocal:yyyy-MM-dd HH:mm} (day {next.CycleDay}) and {following.DueLocal:yyyy-MM-dd HH:mm} (day {following.CycleDay}).");
-        }
-        else
-        {
-            ActivityLog.Write($"No day alert remains before reset {_weeklyLimit.ResetsAt.ToLocalTime():yyyy-MM-dd HH:mm}; waiting for Codex to expose the next cycle.");
-        }
+        DateTime next = DailyReminderScheduler.FindNext(_settings, now);
+        long milliseconds = (long)Math.Ceiling((next - now).TotalMilliseconds);
+        uint timerDelay = (uint)Math.Clamp(milliseconds, 1000L, (long)uint.MaxValue - 1);
+        NativeMethods.SetTimer(_messageWindow, SchedulerTimerId, timerDelay, 0);
+        ActivityLog.Write($"Next daily summary scheduled for {next:yyyy-MM-dd HH:mm}.");
 
         UpdateNextReminderText();
     }
 
-    private void ShowTestAlert(int cycleDay)
+    private void MarkTodaySummarySatisfiedIfDue()
     {
-        DateTime reset = DateTime.Now.AddDays(cycleDay == 6 ? 2 : 1);
-        long resetUnixSeconds = new DateTimeOffset(reset).ToUnixTimeSeconds();
-        ShowAlert(new ReminderOccurrence(DateTime.Now, reset, resetUnixSeconds, cycleDay, cycleDay == 6 ? 2 : 1));
+        DailyReminderOccurrence? due = DailyReminderScheduler.FindDue(_settings, DateTime.Now);
+        if (due is null)
+        {
+            return;
+        }
+
+        _settings = _settings with { LastDailySummaryDate = due.DateKey };
+        SettingsStore.Save(_settings);
     }
 
-    private void ShowTestUsageWarning()
+    private void ShowTestSummary()
     {
-        WeeklyRateLimit? actualLimit = _weeklyLimit;
-        DateTimeOffset reset = DateTimeOffset.Now.AddDays(3);
-        _weeklyLimit = new WeeklyRateLimit("codex", "Codex", 96, 10_080, reset.ToUnixTimeSeconds(), actualLimit?.PlanType);
-        ShowUsageWarning(new UsageWarningOccurrence(_weeklyLimit.ResetsAtUnixSeconds, 95));
-        _weeklyLimit = actualLimit;
+        IReadOnlyList<CodexRateLimitWindow> actualLimits = _limits;
+        if (_limits.Count == 0)
+        {
+            DateTimeOffset now = DateTimeOffset.Now;
+            _limits =
+            [
+                new("codex", null, "primary", 42, 10_080, now.AddDays(4).ToUnixTimeSeconds(), "pro"),
+                new("codex_bengalfox", "GPT-5.3-Codex-Spark", "primary", 15, 300, now.AddHours(3).ToUnixTimeSeconds(), "pro"),
+                new("codex_bengalfox", "GPT-5.3-Codex-Spark", "secondary", 27, 10_080, now.AddDays(5).ToUnixTimeSeconds(), "pro")
+            ];
+        }
+
+        ShowLimitAlert(
+            "TEST · DAILY CODEX LIMIT SUMMARY",
+            "Your current Codex limits",
+            "This is the real full-screen reminder layout. Close it to keep the tray app running.",
+            "test summary");
+        _limits = actualLimits;
     }
 
     private void BeginRateLimitRefresh()
@@ -747,10 +690,10 @@ internal sealed class TrayApplication : IDisposable
             RateLimitRefreshResult result;
             try
             {
-                WeeklyRateLimit limit = await CodexAppServerClient.ReadWeeklyLimitAsync(
+                IReadOnlyList<CodexRateLimitWindow> limits = await CodexAppServerClient.ReadRateLimitsAsync(
                     TimeSpan.FromSeconds(20),
                     _shutdown.Token).ConfigureAwait(false);
-                result = new RateLimitRefreshResult(limit, null);
+                result = new RateLimitRefreshResult(limits, null);
             }
             catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
             {
@@ -783,23 +726,51 @@ internal sealed class TrayApplication : IDisposable
         }
 
         _refreshInProgress = false;
-        if (result?.Limit is not null)
+        if (result?.Limits is { Count: > 0 })
         {
-            _weeklyLimit = result.Limit;
+            LimitMonitorResult monitor = LimitMonitor.Evaluate(_limitStates, result.Limits);
+            _limitStates = monitor.States;
+            _limits = monitor.States.Select(state => state.Limit).ToArray();
+            LimitStateStore.Save(_limitStates);
             _refreshFailureCount = 0;
-            _connectionStatus = "Connected automatically to Codex";
-            _settings = _settings with
+            _connectionStatus = $"Connected automatically to Codex · {_limits.Count} live clocks";
+            ActivityLog.Write($"Codex refresh succeeded: {string.Join(" | ", _limits.Select(FormatLogLimit))}.");
+            ScheduleRateLimitRefresh(TimeSpan.FromMinutes(15));
+
+            foreach (LimitMonitorEvent item in monitor.Events)
             {
-                LastKnownResetUnixSeconds = result.Limit.ResetsAtUnixSeconds,
-                LastKnownUsedPercent = result.Limit.UsedPercent,
-                LastKnownPlanType = result.Limit.PlanType
-            };
-            SettingsStore.Save(_settings);
-            ActivityLog.Write(
-                $"Codex refresh succeeded: {FormatPercentage(result.Limit.NormalizedUsedPercent)}% used, " +
-                $"{FormatPercentage(result.Limit.RemainingPercent)}% left, reset {result.Limit.ResetsAt.ToLocalTime():yyyy-MM-dd HH:mm}.");
-            ScheduleRateLimitRefresh(TimeSpan.FromHours(1));
-            EvaluateAndSchedule();
+                ActivityLog.Write(item.Kind == LimitMonitorEventKind.Threshold
+                    ? $"Detected {item.Threshold}% threshold for {item.Limit.DisplayName} {item.Limit.WindowLabel}."
+                    : $"Detected {FormatPercentage(item.RecoveredPercent)}-point recovery for {item.Limit.DisplayName} {item.Limit.WindowLabel}.");
+            }
+
+            LimitMonitorEvent? alertEvent = monitor.Events
+                .OrderByDescending(item => item.Kind == LimitMonitorEventKind.Threshold ? 1 : 0)
+                .ThenByDescending(item => item.Threshold)
+                .ThenByDescending(item => item.RecoveredPercent)
+                .FirstOrDefault();
+            if (alertEvent is not null)
+            {
+                MarkTodaySummarySatisfiedIfDue();
+                if (alertEvent.Kind == LimitMonitorEventKind.Threshold)
+                {
+                    ShowLimitAlert(
+                        $"WEEKLY SAFETY ALERT · {alertEvent.Threshold}% USED",
+                        $"Only {FormatPercentage(alertEvent.Limit.RemainingPercent)}% of {alertEvent.Limit.DisplayName} remains",
+                        $"The {alertEvent.Limit.WindowLabel} allowance crossed {alertEvent.Threshold}% used. Prioritize your remaining work.",
+                        $"{alertEvent.Threshold}% threshold alert");
+                }
+                else
+                {
+                    ShowLimitAlert(
+                        "ROLLING LIMIT RECOVERY DETECTED",
+                        $"{alertEvent.Limit.DisplayName} recovered {FormatPercentage(alertEvent.RecoveredPercent)}%",
+                        "Older usage aged out of the rolling window. The reset shown by Codex may move again as other usage ages out.",
+                        "rolling recovery alert");
+                }
+            }
+
+            EvaluateDailySummary();
         }
         else
         {
@@ -838,39 +809,17 @@ internal sealed class TrayApplication : IDisposable
         _ => exception.Message.TrimEnd('.') + "."
     };
 
-    private void ShowAlert(ReminderOccurrence occurrence)
+    private void ShowLimitAlert(string eyebrow, string title, string body, string logLabel)
     {
-        _alertIsUsageWarning = false;
-        _alertUsageThreshold = 0;
-        _alertCycleDay = occurrence.CycleDay;
-        _alertDaysBeforeReset = occurrence.DaysBeforeReset;
-        _alertReset = occurrence.ResetLocal;
-        _alertHasUsage = _weeklyLimit is not null;
-        _alertUsedPercent = _weeklyLimit?.NormalizedUsedPercent ?? 0;
-        _alertRemainingPercent = _weeklyLimit?.RemainingPercent ?? 100;
-        DisplayAlert();
-    }
-
-    private void ShowUsageWarning(UsageWarningOccurrence occurrence)
-    {
-        _alertIsUsageWarning = true;
-        _alertUsageThreshold = occurrence.UsedThreshold;
-        _alertReset = _weeklyLimit!.ResetsAt.ToLocalTime().DateTime;
-        _alertHasUsage = true;
-        _alertUsedPercent = _weeklyLimit.NormalizedUsedPercent;
-        _alertRemainingPercent = _weeklyLimit.RemainingPercent;
-        DisplayAlert();
-    }
-
-    private void DisplayAlert()
-    {
+        _alertEyebrow = eyebrow;
+        _alertTitle = title;
+        _alertBody = body;
+        _alertLogLabel = logLabel;
+        _alertLimits = _limits.ToArray();
         EnsureAlertWindow();
         HideSettings();
 
-        string alertWindowTitle = _alertHasUsage
-            ? $"Codex weekly limit reminder — {FormatPercentage(_alertUsedPercent)}% used, {FormatPercentage(_alertRemainingPercent)}% left"
-            : "Codex weekly limit reminder — usage data unavailable";
-        NativeMethods.SetWindowText(_alertWindow, alertWindowTitle);
+        NativeMethods.SetWindowText(_alertWindow, $"Codex Limit Reminder — {title}");
 
         NativeMethods.GetCursorPos(out NativeMethods.Point cursor);
         NativeMethods.MonitorInfo monitor = GetMonitorInfo(cursor);
@@ -898,7 +847,7 @@ internal sealed class TrayApplication : IDisposable
         _alertWindow = CreateRequiredWindow(
             NativeMethods.WsExTopmost,
             NativeMethods.AlertWindowClass,
-            "Codex weekly limit reminder",
+            "Codex Limit Reminder",
             NativeMethods.WsPopup,
             0,
             0,
@@ -934,7 +883,7 @@ internal sealed class TrayApplication : IDisposable
         int width = Scale(230, dpi);
         int height = Scale(54, dpi);
         int x = (clientWidth - width) / 2;
-        int y = Math.Max(0, (clientHeight * 3 / 4) - height / 2);
+        int y = Math.Max(0, (clientHeight * 5 / 6) - height / 2);
         NativeMethods.SetWindowPos(
             NativeMethods.GetDlgItem(window, AlertCloseControl),
             0,
@@ -958,16 +907,14 @@ internal sealed class TrayApplication : IDisposable
             NativeMethods.Rect eyebrow = new()
             {
                 Left = client.Left + client.Width / 10,
-                Top = client.Top + client.Height / 7,
+                Top = client.Top + client.Height / 12,
                 Right = client.Right - client.Width / 10,
-                Bottom = client.Top + client.Height / 7 + client.Height / 12
+                Bottom = client.Top + client.Height / 6
             };
             nint previous = NativeMethods.SelectObject(deviceContext, _alertBodyFont);
             NativeMethods.DrawText(
                 deviceContext,
-                _alertIsUsageWarning
-                    ? $"WEEKLY CODEX LIMIT · {_alertUsageThreshold}% SAFETY ALERT"
-                    : $"WEEKLY CODEX LIMIT · DAY {_alertCycleDay}",
+                _alertEyebrow,
                 -1,
                 ref eyebrow,
                 NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
@@ -975,54 +922,84 @@ internal sealed class TrayApplication : IDisposable
             NativeMethods.Rect title = new()
             {
                 Left = client.Left + client.Width / 12,
-                Top = client.Top + client.Height / 3 - client.Height / 12,
+                Top = client.Top + client.Height / 6,
                 Right = client.Right - client.Width / 12,
-                Bottom = client.Top + client.Height / 2
+                Bottom = client.Top + client.Height * 3 / 10
             };
             NativeMethods.SelectObject(deviceContext, _alertTitleFont);
-            string titleText = _alertIsUsageWarning
-                ? $"Only {FormatPercentage(_alertRemainingPercent)}% of your weekly limit remains"
-                : _alertDaysBeforeReset == 2
-                    ? "2 days remain in this Codex cycle"
-                    : "Tomorrow is your Codex weekly reset";
             NativeMethods.DrawText(
                 deviceContext,
-                titleText,
+                _alertTitle,
                 -1,
                 ref title,
-                NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
+                NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtWordBreak);
 
-            NativeMethods.Rect usage = new()
+            int tableTop = client.Top + client.Height * 3 / 10;
+            int tableBottom = client.Top + client.Height * 2 / 3;
+            if (_alertLimits.Count == 0)
             {
-                Left = client.Left + client.Width / 10,
-                Top = client.Top + client.Height * 9 / 20,
-                Right = client.Right - client.Width / 10,
-                Bottom = client.Top + client.Height * 3 / 5
-            };
-            NativeMethods.SelectObject(deviceContext, _alertUsageFont);
-            string usageText = _alertHasUsage
-                ? $"{FormatPercentage(_alertUsedPercent)}% USED   ·   {FormatPercentage(_alertRemainingPercent)}% LEFT"
-                : "USAGE DATA UNAVAILABLE";
-            NativeMethods.DrawText(
-                deviceContext,
-                usageText,
-                -1,
-                ref usage,
-                NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
+                var unavailable = new NativeMethods.Rect
+                {
+                    Left = client.Left + client.Width / 10,
+                    Top = tableTop,
+                    Right = client.Right - client.Width / 10,
+                    Bottom = tableBottom
+                };
+                NativeMethods.SelectObject(deviceContext, _alertUsageFont);
+                NativeMethods.DrawText(deviceContext, "USAGE DATA UNAVAILABLE", -1, ref unavailable,
+                    NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
+            }
+            else
+            {
+                int rowHeight = (tableBottom - tableTop) / _alertLimits.Count;
+                for (int index = 0; index < _alertLimits.Count; index++)
+                {
+                    CodexRateLimitWindow limit = _alertLimits[index];
+                    int rowTop = tableTop + index * rowHeight;
+                    var label = new NativeMethods.Rect
+                    {
+                        Left = client.Left + client.Width / 12,
+                        Top = rowTop,
+                        Right = client.Right - client.Width / 12,
+                        Bottom = rowTop + rowHeight * 2 / 5
+                    };
+                    NativeMethods.SelectObject(deviceContext, _alertBodyFont);
+                    NativeMethods.DrawText(
+                        deviceContext,
+                        $"{limit.DisplayName.ToUpperInvariant()} · {limit.WindowLabel.ToUpperInvariant()}",
+                        -1,
+                        ref label,
+                        NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
+
+                    var value = new NativeMethods.Rect
+                    {
+                        Left = client.Left + client.Width / 12,
+                        Top = rowTop + rowHeight * 2 / 5,
+                        Right = client.Right - client.Width / 12,
+                        Bottom = rowTop + rowHeight
+                    };
+                    DateTime reset = limit.ResetsAt.ToLocalTime().DateTime;
+                    NativeMethods.SelectObject(deviceContext, _alertUsageFont);
+                    NativeMethods.DrawText(
+                        deviceContext,
+                        $"{FormatPercentage(limit.NormalizedUsedPercent)}% USED   ·   {FormatPercentage(limit.RemainingPercent)}% LEFT   ·   RESETS {reset:ddd d MMM HH:mm}",
+                        -1,
+                        ref value,
+                        NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
+                }
+            }
 
             NativeMethods.Rect body = new()
             {
                 Left = client.Left + client.Width / 8,
-                Top = client.Top + client.Height * 3 / 5,
+                Top = client.Top + client.Height * 2 / 3,
                 Right = client.Right - client.Width / 8,
-                Bottom = client.Top + client.Height * 7 / 10
+                Bottom = client.Top + client.Height * 4 / 5
             };
             NativeMethods.SelectObject(deviceContext, _alertBodyFont);
             NativeMethods.DrawText(
                 deviceContext,
-                _alertIsUsageWarning
-                    ? $"Prioritize your remaining work now. Weekly reset: {_alertReset:dddd, d MMMM 'at' HH:mm}."
-                    : $"Plan your remaining work. Weekly reset: {_alertReset:dddd, d MMMM 'at' HH:mm}.",
+                _alertBody,
                 -1,
                 ref body,
                 NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtWordBreak);
@@ -1043,9 +1020,7 @@ internal sealed class TrayApplication : IDisposable
 
         if (_alertVisible)
         {
-            ActivityLog.Write(_alertIsUsageWarning
-                ? $"Closed {_alertUsageThreshold}% safety alert."
-                : $"Closed day-{_alertCycleDay} alert.");
+            ActivityLog.Write($"Closed {_alertLogLabel}.");
         }
 
         _alertVisible = false;
@@ -1070,14 +1045,8 @@ internal sealed class TrayApplication : IDisposable
         {
             case LaunchCommandKind.Background:
                 break;
-            case LaunchCommandKind.TestDay6:
-                ShowTestAlert(6);
-                break;
-            case LaunchCommandKind.TestDay7:
-                ShowTestAlert(7);
-                break;
-            case LaunchCommandKind.TestUsage95:
-                ShowTestUsageWarning();
+            case LaunchCommandKind.TestSummary:
+                ShowTestSummary();
                 break;
             default:
                 ShowSettings();
@@ -1117,7 +1086,7 @@ internal sealed class TrayApplication : IDisposable
             case NativeMethods.WmTimer:
                 if (wParam == SchedulerTimerId)
                 {
-                    app.EvaluateAndSchedule();
+                    app.EvaluateDailySummary();
                 }
                 else if (wParam == RateRefreshTimerId)
                 {
@@ -1127,7 +1096,7 @@ internal sealed class TrayApplication : IDisposable
 
                 return 0;
             case NativeMethods.WmTimeChange:
-                app.EvaluateAndSchedule();
+                app.EvaluateDailySummary();
                 app.BeginRateLimitRefresh();
                 return 0;
             case NativeMethods.WmExternalCommand:
@@ -1165,7 +1134,7 @@ internal sealed class TrayApplication : IDisposable
 
                 if (command == TestControl)
                 {
-                    app.ShowTestAlert(6);
+                    app.ShowTestSummary();
                     return 0;
                 }
 
@@ -1232,6 +1201,20 @@ internal sealed class TrayApplication : IDisposable
 
     private static string FormatPercentage(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
 
+    private static string FormatCompactLimit(CodexRateLimitWindow limit)
+    {
+        string name = limit.LimitId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+            ? "General"
+            : limit.DisplayName.Replace("GPT-5.3-Codex-", string.Empty, StringComparison.OrdinalIgnoreCase);
+        DateTime reset = limit.ResetsAt.ToLocalTime().DateTime;
+        return $"{name} {limit.WindowLabel}: {FormatPercentage(limit.NormalizedUsedPercent)}% used · " +
+               $"{FormatPercentage(limit.RemainingPercent)}% left · {reset:d MMM HH:mm}";
+    }
+
+    private static string FormatLogLimit(CodexRateLimitWindow limit) =>
+        $"{limit.DisplayName} {limit.WindowLabel}: {FormatPercentage(limit.NormalizedUsedPercent)}% used, " +
+        $"{FormatPercentage(limit.RemainingPercent)}% left, reset {limit.ResetsAt.ToLocalTime():yyyy-MM-dd HH:mm}";
+
     private static int Scale(int value, uint dpi) => NativeMethods.MulDiv(value, (int)dpi, 96);
 
     private static nint CreateSegoeFont(int points, int weight, uint dpi) => NativeMethods.CreateFont(
@@ -1290,5 +1273,5 @@ internal sealed class TrayApplication : IDisposable
         window = 0;
     }
 
-    private sealed record RateLimitRefreshResult(WeeklyRateLimit? Limit, string? Error);
+    private sealed record RateLimitRefreshResult(IReadOnlyList<CodexRateLimitWindow>? Limits, string? Error);
 }

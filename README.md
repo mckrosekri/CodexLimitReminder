@@ -1,18 +1,32 @@
 # Codex Limit Reminder
 
-A tiny, private Windows tray app that reminds you on the final two mornings of your weekly Codex limit cycle.
+A tiny, private Windows tray app that monitors every usage-limit clock exposed by your signed-in Codex installation.
 
 - Normally visible only as a system-tray icon; no background taskbar window.
-- Full-screen, topmost reminder with a keyboard-accessible **Close reminder** button.
-- Prominently shows the live weekly balance, for example **7% used · 93% left**.
-- Two alerts per cycle: day 6 (two calendar days before reset) and day 7 (one calendar day before reset).
-- Automatic full-screen safety alerts at 80% and 95% used, so unusually heavy use cannot exhaust the limit before day 6.
-- Reads the exact weekly reset and current usage from your signed-in local Codex installation.
-- Only one setup choice: the morning notification time.
-- Refreshes hourly, retries automatically after connection problems, and keeps the last known reset offline.
-- Starts quietly at Windows sign-in through two independent per-user triggers and repairs both whenever the app launches.
-- Native single-file x64 executable with no installer framework or runtime bundle.
-- Stores only the notification time, reminder deduplication key, and last Codex status in the current user's registry.
+- Full-screen, topmost alerts with a keyboard-accessible **Close reminder** button.
+- One daily summary at your chosen time, showing every live General and model-specific limit.
+- Immediate weekly safety alerts at 50%, 75%, 90%, and 95% used.
+- Automatic alerts when a rolling weekly allowance materially recovers.
+- Tracks General Codex and separate model clocks such as GPT-5.3-Codex-Spark's five-hour and weekly limits.
+- Checks Codex every 15 minutes, retries automatically after connection problems, and keeps the last live state offline.
+- Starts quietly at Windows sign-in through two independent per-user triggers and repairs both whenever it launches.
+- Native single-file x64 executable; no installer framework, bundled browser, cloud service, or separate runtime.
+
+## Why the app uses daily summaries
+
+Codex labels weekly windows as 10,080 minutes, but their displayed reset timestamps can move as older usage ages out. A fixed "day 6/day 7" reminder therefore is not reliable: the target can advance before the reminder date arrives.
+
+This app treats weekly limits as rolling state. It reports the exact values Codex currently exposes instead of assuming one Sunday-to-Sunday cycle.
+
+## Alerts
+
+| Alert | When it appears |
+| --- | --- |
+| Daily summary | Once each local day at the configured time; if Windows starts late, it appears once later that day |
+| Weekly threshold | As soon as a 15-minute check first observes 50%, 75%, 90%, or 95% used |
+| Rolling recovery | As soon as a check observes a major usage drop, or a reset advances with a near-full recovery |
+
+Every full-screen alert lists all current clocks with used percentage, remaining percentage, and the exact reset currently reported by Codex. Five-hour clocks appear in the daily summary but do not trigger the weekly percentage warnings.
 
 ## Install
 
@@ -22,41 +36,33 @@ A tiny, private Windows tray app that reminds you on the final two mornings of y
 2. Extract the ZIP.
 3. Right-click `install.ps1`, choose **Run with PowerShell**, and follow the first-run settings window.
 
-The installer copies the app to `%LOCALAPPDATA%\Programs\CodexLimitReminder`, creates current-user startup triggers, and opens the settings window. The app re-creates both triggers on every primary launch: an HKCU Run value and a Startup-folder `wscript.exe` wrapper. The wrapper launches the GUI-subsystem executable hidden, so neither path flashes a console.
+The installer copies the app to `%LOCALAPPDATA%\Programs\CodexLimitReminder`, creates current-user startup triggers, and opens settings. The app repairs both startup triggers on every primary launch: an HKCU Run value and a Startup-folder `wscript.exe` wrapper. Both start the GUI-subsystem executable without a console flash.
 
-You can also run `CodexLimitReminder.exe` directly without installing it. Launching a portable copy once enables quiet startup with Windows automatically.
+You can also run `CodexLimitReminder.exe` directly without installing it. Launching a portable copy once enables quiet Windows startup automatically.
 
 ## One-time setup
 
-1. Make sure the Codex CLI is installed and signed in.
+1. Make sure the Codex CLI or desktop app is installed and signed in.
 2. Open **Codex Limit Reminder settings** from the tray icon.
-3. Choose your preferred notification time and select **Save time**. Day-6/day-7 reminders use that time; 80% and 95% safety alerts appear immediately when an automatic Codex refresh first observes the threshold.
+3. Choose the daily summary time and select **Save time**.
 
-That is the entire setup. The app launches Codex's local App Server without a console window and reads `account/rateLimits/read`. It selects the main `codex` seven-day window, including the exact reset timestamp and current usage percentage. It never guesses a future reset by adding seven days; after a reset it waits for Codex to expose the next exact cycle.
-
-The schedule is date-based:
-
-| Reminder | When it appears |
-| --- | --- |
-| Day 6 | Reminder time on the date two days before reset |
-| Day 7 | Reminder time on the date one day before reset |
-
-Each reminder is recorded before it appears, so restarting the app cannot duplicate that day's alert. If the PC wakes or the app starts later on the same reminder date, the alert still appears once. It does not backfill a reminder from a previous date.
+That is the only setup. The app launches Codex's local App Server without a console window and makes the read-only `account/rateLimits/read` request. It discovers every returned bucket and window automatically.
 
 ## Tray controls
 
 - Left-click the tray icon to open settings.
-- Right-click for **Settings**, **Refresh Codex status**, both test reminders, or **Exit**.
-- The full-screen reminder closes through the button, `Enter`, `Escape`, or `Alt+F4`; the tray app keeps running.
+- Right-click for **Settings**, **Refresh Codex status**, **Test daily limit summary**, or **Exit**.
+- The full-screen alert closes through the button, `Enter`, `Escape`, or `Alt+F4`; the tray app keeps running.
 
-## Privacy and security
+## Privacy and local state
 
-Codex Limit Reminder does not ask for or store your password, session token, or API key. It does not automate a browser, collect telemetry, or run its own cloud service. It starts the installed `codex.exe app-server` locally over hidden standard input/output and makes the read-only `account/rateLimits/read` request; Codex itself uses your existing sign-in.
+Codex Limit Reminder does not ask for or store your password, session token, or API key. It does not automate a browser, collect telemetry, or run its own cloud service. Codex itself uses your existing local sign-in.
 
-Local settings are stored under:
+Settings and deduplication state are stored under:
 
 ```text
 HKEY_CURRENT_USER\Software\CodexLimitReminder
+HKEY_CURRENT_USER\Software\CodexLimitReminder\LimitWindows
 ```
 
 Quiet startup uses:
@@ -66,9 +72,11 @@ HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run\CodexLimitRemind
 %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CodexLimitReminder.vbs
 ```
 
+The small rotating diagnostic log is `%LOCALAPPDATA%\CodexLimitReminder\activity.log`. It records startup repair, successful or failed Codex checks, live limit values, scheduled daily summaries, and alert display/close events. It contains no tokens or message content.
+
 ## Uninstall
 
-Run `uninstall.ps1`. Add `-KeepSettings` if you want to preserve the weekly schedule for a later reinstall.
+Run `uninstall.ps1`. Add `-KeepSettings` if you want to preserve the schedule and monitoring state for a later reinstall.
 
 ## Build and test
 
@@ -78,24 +86,18 @@ Requirements: Windows 10/11 x64 and the .NET 10 SDK with NativeAOT prerequisites
 .\scripts\build.ps1
 ```
 
-The script builds the solution, runs all schedule/startup tests, and publishes the single native executable to `artifacts\win-x64`.
+The script builds the solution, runs all parser/scheduler/rolling-state/startup tests, and publishes the native executable to `artifacts\win-x64`.
 
 Manual test hooks:
 
 ```powershell
 .\artifacts\win-x64\CodexLimitReminder.exe --show-settings
-.\artifacts\win-x64\CodexLimitReminder.exe --test-day-6
-.\artifacts\win-x64\CodexLimitReminder.exe --test-day-7
-.\artifacts\win-x64\CodexLimitReminder.exe --test-usage-95
+.\artifacts\win-x64\CodexLimitReminder.exe --test-summary
 ```
 
 ## Design notes
 
-This is a direct Win32 C# application compiled with NativeAOT. That choice keeps the distribution self-contained and much smaller than a WinUI runtime bundle while retaining native controls, UI Automation names, high-contrast system colors, per-monitor DPI awareness, and a GUI-only startup path.
-
-The test suite covers App Server response parsing, correct selection of the main Codex weekly bucket, day-6/day-7 selection from the exact reset timestamp, 80%/95% safety alerts, duplicate suppression, missed-day behavior, and safe startup-command quoting.
-
-For local diagnostics, the app keeps a small rotating activity log at `%LOCALAPPDATA%\CodexLimitReminder\activity.log`. It records startup repair, successful/failed Codex refreshes, exact scheduled alert times, and alert display/close events; it contains no tokens or message content.
+This is a direct Win32 C# application compiled with NativeAOT. That keeps the distribution self-contained and small while retaining native controls, UI Automation names, high-contrast system colors, per-monitor DPI awareness, and a GUI-only startup path.
 
 ## License
 
