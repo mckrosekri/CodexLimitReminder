@@ -8,13 +8,18 @@ internal static class NativeMethods
     internal const string MessageWindowClass = "CodexLimitReminder.MessageWindow";
     internal const string SettingsWindowClass = "CodexLimitReminder.SettingsWindow";
     internal const string AlertWindowClass = "CodexLimitReminder.AlertWindow";
+    internal const string WidgetWindowClass = "CodexLimitReminder.WidgetWindow";
 
     internal static readonly nint HwndMessage = new(-3);
     internal static readonly nint HwndTopmost = new(-1);
 
+    internal const uint WmCreate = 0x0001;
     internal const uint WmDestroy = 0x0002;
     internal const uint WmClose = 0x0010;
+    internal const uint WmEraseBackground = 0x0014;
     internal const uint WmPaint = 0x000F;
+    internal const uint WmDisplayChange = 0x007E;
+    internal const uint WmNcHitTest = 0x0084;
     internal const uint WmCommand = 0x0111;
     internal const uint WmTimer = 0x0113;
     internal const uint WmTimeChange = 0x001E;
@@ -23,6 +28,8 @@ internal static class NativeMethods
     internal const uint WmSetFont = 0x0030;
     internal const uint WmContextMenu = 0x007B;
     internal const uint WmLButtonUp = 0x0202;
+    internal const uint WmExitSizeMove = 0x0232;
+    internal const uint WmDpiChanged = 0x02E0;
     internal const uint WmApp = 0x8000;
     internal const uint WmTrayIcon = WmApp + 1;
     internal const uint WmExternalCommand = WmApp + 2;
@@ -45,9 +52,11 @@ internal static class NativeMethods
     internal const uint WsExToolWindow = 0x00000080;
     internal const uint WsExTopmost = 0x00000008;
     internal const uint WsExClientEdge = 0x00000200;
+    internal const uint WsExLayered = 0x00080000;
 
     internal const uint CsHRedraw = 0x0002;
     internal const uint CsVRedraw = 0x0001;
+    internal const uint CsDropShadow = 0x00020000;
 
     internal const int SwHide = 0;
     internal const int SwShow = 5;
@@ -55,6 +64,12 @@ internal static class NativeMethods
 
     internal const uint SwpShowWindow = 0x0040;
     internal const uint SwpNoActivate = 0x0010;
+    internal const uint SwpNoZOrder = 0x0004;
+
+    internal const uint LwaAlpha = 0x00000002;
+
+    internal const int HtClient = 1;
+    internal const int HtCaption = 2;
 
     internal const uint NifMessage = 0x00000001;
     internal const uint NifIcon = 0x00000002;
@@ -91,6 +106,7 @@ internal static class NativeMethods
 
     internal const int ColorWindow = 5;
     internal const int ColorWindowText = 8;
+    internal const int ColorHighlight = 13;
     internal const int ColorButtonFace = 15;
     internal const int Transparent = 1;
 
@@ -98,6 +114,8 @@ internal static class NativeMethods
     internal const uint DtVCenter = 0x00000004;
     internal const uint DtSingleLine = 0x00000020;
     internal const uint DtWordBreak = 0x00000010;
+    internal const uint DtEndEllipsis = 0x00008000;
+    internal const uint DtNoPrefix = 0x00000800;
 
     internal const int MonitorDefaultToNearest = 2;
 
@@ -284,6 +302,13 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetLayeredWindowAttributes(nint window, uint colorKey, byte alpha, uint flags);
+
+    [DllImport("user32.dll")]
+    internal static extern int SetWindowRgn(nint window, nint region, bool redraw);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool IsChild(nint parent, nint window);
 
     [DllImport("user32.dll")]
@@ -372,6 +397,9 @@ internal static class NativeMethods
 
     [DllImport("gdi32.dll")]
     internal static extern nint SelectObject(nint deviceContext, nint value);
+
+    [DllImport("gdi32.dll")]
+    internal static extern nint CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
 
     [DllImport("gdi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

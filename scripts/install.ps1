@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$SourcePath
+    [string]$SourcePath,
+    [switch]$Background
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,5 +44,9 @@ $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 New-Item -Path $runKey -Force | Out-Null
 New-ItemProperty -Path $runKey -Name 'CodexLimitReminder' -Value ('"{0}" --background' -f $installedExecutable) -PropertyType String -Force | Out-Null
 
-Start-Process -FilePath $installedExecutable -ArgumentList '--show-settings'
+if ($Background) {
+    Start-Process -FilePath $installedExecutable -ArgumentList '--background' -WindowStyle Hidden
+} else {
+    Start-Process -FilePath $installedExecutable -ArgumentList '--show-settings'
+}
 Write-Host "Installed Codex Limit Reminder to $installDirectory"

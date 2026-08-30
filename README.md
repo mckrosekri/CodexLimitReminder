@@ -1,8 +1,11 @@
 # Codex Limit Reminder
 
-A tiny, private Windows tray app that monitors every usage-limit clock exposed by your signed-in Codex installation.
+A tiny, private floating Windows app that monitors every usage-limit clock exposed by your signed-in Codex installation.
 
-- Normally visible only as a system-tray icon; no background taskbar window.
+- Small, semi-transparent, always-on-top limit card with no taskbar window.
+- Collapsed view shows the main weekly allowance, remaining percentage, and current reset time.
+- Select **More** to expand every General and model-specific clock; select **Collapse** to return to the compact view.
+- Drag the card anywhere on the desktop. Its position is remembered across restarts.
 - Full-screen, topmost alerts with a keyboard-accessible **Close reminder** button.
 - One daily summary at your chosen time, showing every live General and model-specific limit.
 - Immediate weekly safety alerts at 50%, 75%, 90%, and 95% used.
@@ -48,10 +51,12 @@ You can also run `CodexLimitReminder.exe` directly without installing it. Launch
 
 That is the only setup. The app launches Codex's local App Server without a console window and makes the read-only `account/rateLimits/read` request. It discovers every returned bucket and window automatically.
 
-## Tray controls
+## Floating widget and tray controls
 
-- Left-click the tray icon to open settings.
-- Right-click for **Settings**, **Refresh Codex status**, **Test daily limit summary**, or **Exit**.
+- Select **More** or **Collapse** on the floating card to change its size.
+- Drag the card background to move it; right-click it for the tray menu.
+- Left-click the tray icon to show or hide the floating card.
+- Right-click for **Show/Hide floating limits**, **Settings**, **Refresh Codex status**, **Test daily limit summary**, or **Exit**.
 - The full-screen alert closes through the button, `Enter`, `Escape`, or `Alt+F4`; the tray app keeps running.
 
 ## Privacy and local state
@@ -92,12 +97,14 @@ Manual test hooks:
 
 ```powershell
 .\artifacts\win-x64\CodexLimitReminder.exe --show-settings
+.\artifacts\win-x64\CodexLimitReminder.exe --show-widget-expanded
+.\artifacts\win-x64\CodexLimitReminder.exe --show-widget-collapsed
 .\artifacts\win-x64\CodexLimitReminder.exe --test-summary
 ```
 
 ## Design notes
 
-This is a direct Win32 C# application compiled with NativeAOT. That keeps the distribution self-contained and small while retaining native controls, UI Automation names, high-contrast system colors, per-monitor DPI awareness, and a GUI-only startup path.
+This is a direct Win32 C# application compiled with NativeAOT. That keeps the distribution self-contained and small while retaining native controls, UI Automation names, high-contrast system colors, per-monitor DPI awareness, semi-transparent layered rendering, and a GUI-only startup path.
 
 ## License
 

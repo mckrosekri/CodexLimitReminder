@@ -9,9 +9,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>CodexLimitReminder</AssemblyName>
     <RootNamespace>CodexLimitReminder</RootNamespace>
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
     <AssemblyTitle>Codex Limit Reminder</AssemblyTitle>
-    <Description>A tiny tray-only monitor for every live Codex usage limit.</Description>
+    <Description>A tiny floating Windows monitor for every live Codex usage limit.</Description>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

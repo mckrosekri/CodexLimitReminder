@@ -21,6 +21,10 @@ var tests = new (string Name, Action Run)[]
     ("reset advance with near-full recovery is detected", ResetAdvanceRecoveryIsDetected),
     ("warning thresholds restart after recovery", ThresholdRestartsAfterRecovery),
     ("multiple limit states remain independent", MultipleLimitStatesAreIndependent),
+    ("collapsed widget remains compact", CollapsedWidgetRemainsCompact),
+    ("expanded widget grows for live limits", ExpandedWidgetGrowsForLimits),
+    ("widget placement stays inside the work area", WidgetPlacementStaysInsideWorkArea),
+    ("widget resize keeps its bottom-right anchor", WidgetResizeKeepsBottomRightAnchor),
     ("startup command is quoted and windowless", StartupCommandIsQuoted),
     ("startup-folder wrapper is hidden and quoted", StartupFolderWrapperIsHiddenAndQuoted)
 };
@@ -74,6 +78,42 @@ static CodexRateLimitWindow SparkFiveHour(double used = 0) => new(
     300,
     new DateTimeOffset(2026, 8, 30, 17, 29, 0, TimeSpan.Zero).ToUnixTimeSeconds(),
     "pro");
+
+static void CollapsedWidgetRemainsCompact()
+{
+    WidgetSize collapsed = WidgetLayout.GetLogicalSize(expanded: false, limitCount: 8);
+    Equal(320, collapsed.Width);
+    Equal(116, collapsed.Height);
+}
+
+static void ExpandedWidgetGrowsForLimits()
+{
+    WidgetSize collapsed = WidgetLayout.GetLogicalSize(expanded: false, limitCount: 3);
+    WidgetSize expanded = WidgetLayout.GetLogicalSize(expanded: true, limitCount: 3);
+    True(expanded.Width > collapsed.Width);
+    True(expanded.Height > collapsed.Height);
+}
+
+static void WidgetPlacementStaysInsideWorkArea()
+{
+    var work = new WidgetRectangle(0, 0, 1920, 1040);
+    WidgetRectangle placed = WidgetLayout.PlaceSaved(5000, -200, new WidgetSize(320, 116), work);
+    Equal(1600, placed.Left);
+    Equal(0, placed.Top);
+    Equal(1920, placed.Right);
+    Equal(116, placed.Bottom);
+}
+
+static void WidgetResizeKeepsBottomRightAnchor()
+{
+    var work = new WidgetRectangle(0, 0, 1920, 1040);
+    var current = new WidgetRectangle(1584, 908, 1904, 1024);
+    WidgetRectangle expanded = WidgetLayout.ResizeFromBottomRight(current, new WidgetSize(420, 288), work);
+    Equal(1904, expanded.Right);
+    Equal(1024, expanded.Bottom);
+    Equal(1484, expanded.Left);
+    Equal(736, expanded.Top);
+}
 
 static void ParserReadsAllClocks()
 {
@@ -242,6 +282,14 @@ static void NotNull(object? value)
     if (value is null)
     {
         throw new InvalidOperationException("Expected a value, got null.");
+    }
+}
+
+static void True(bool value)
+{
+    if (!value)
+    {
+        throw new InvalidOperationException("Expected condition to be true.");
     }
 }
 

@@ -15,6 +15,7 @@ internal sealed class TrayApplication : IDisposable
     private const int MenuTestSummary = 101;
     private const int MenuExit = 103;
     private const int MenuRefresh = 104;
+    private const int MenuToggleWidget = 105;
 
     private const int ConnectionStatusControl = 201;
     private const int ResetStatusControl = 202;
@@ -26,10 +27,12 @@ internal sealed class TrayApplication : IDisposable
     private const int TestControl = 208;
     private const int HideControl = 209;
     private const int AlertCloseControl = 301;
+    private const int WidgetToggleControl = 401;
 
     private static readonly NativeMethods.WindowProc MessageProcedure = MessageWindowProcedure;
     private static readonly NativeMethods.WindowProc SettingsProcedure = SettingsWindowProcedure;
     private static readonly NativeMethods.WindowProc AlertProcedure = AlertWindowProcedure;
+    private static readonly NativeMethods.WindowProc WidgetProcedure = WidgetWindowProcedure;
     private static TrayApplication? Current;
 
     private readonly nint _instance;
@@ -43,17 +46,24 @@ internal sealed class TrayApplication : IDisposable
     private nint _messageWindow;
     private nint _settingsWindow;
     private nint _alertWindow;
+    private nint _widgetWindow;
     private nint _bodyFont;
     private nint _titleFont;
     private nint _alertTitleFont;
     private nint _alertUsageFont;
     private nint _alertBodyFont;
+    private nint _widgetTitleFont;
+    private nint _widgetMetricFont;
+    private nint _widgetBodyFont;
     private bool _trayIconAdded;
     private bool _settingsVisible;
     private bool _alertVisible;
+    private bool _widgetVisible;
+    private bool _widgetExpanded;
     private bool _exiting;
     private bool _refreshInProgress;
     private int _refreshFailureCount;
+    private DateTime? _lastSuccessfulRefresh;
     private string _connectionStatus = "Connecting to Codex…";
     private string _alertEyebrow = "DAILY CODEX LIMIT SUMMARY";
     private string _alertTitle = "Your current Codex limits";
@@ -89,6 +99,8 @@ internal sealed class TrayApplication : IDisposable
             0);
 
         AddTrayIcon();
+        EnsureWidgetWindow();
+        ShowWidget();
         EvaluateDailySummary();
 
         if (!_settings.IsConfigured || initialCommand.Kind == LaunchCommandKind.ShowSettings)
@@ -98,6 +110,14 @@ internal sealed class TrayApplication : IDisposable
         else if (initialCommand.Kind == LaunchCommandKind.TestSummary)
         {
             ShowTestSummary();
+        }
+        else if (initialCommand.Kind == LaunchCommandKind.ShowWidgetExpanded)
+        {
+            SetWidgetExpanded(true);
+        }
+        else if (initialCommand.Kind == LaunchCommandKind.ShowWidgetCollapsed)
+        {
+            SetWidgetExpanded(false);
         }
 
         BeginRateLimitRefresh();
@@ -147,7 +167,11 @@ internal sealed class TrayApplication : IDisposable
 
         Destroy(ref _alertWindow);
         Destroy(ref _settingsWindow);
+        Destroy(ref _widgetWindow);
         Destroy(ref _messageWindow);
+        DeleteFont(ref _widgetBodyFont);
+        DeleteFont(ref _widgetMetricFont);
+        DeleteFont(ref _widgetTitleFont);
         DeleteFont(ref _alertBodyFont);
         DeleteFont(ref _alertUsageFont);
         DeleteFont(ref _alertTitleFont);
@@ -165,6 +189,11 @@ internal sealed class TrayApplication : IDisposable
             AlertProcedure,
             NativeMethods.GetSysColorBrush(NativeMethods.ColorWindow),
             NativeMethods.CsHRedraw | NativeMethods.CsVRedraw);
+        RegisterWindowClass(
+            NativeMethods.WidgetWindowClass,
+            WidgetProcedure,
+            NativeMethods.GetSysColorBrush(NativeMethods.ColorWindow),
+            NativeMethods.CsHRedraw | NativeMethods.CsVRedraw | NativeMethods.CsDropShadow);
     }
 
     private void RegisterWindowClass(string name, NativeMethods.WindowProc procedure, nint background, uint style = 0)
@@ -255,7 +284,7 @@ internal sealed class TrayApplication : IDisposable
         Flags = NativeMethods.NifMessage | NativeMethods.NifIcon | NativeMethods.NifTip | NativeMethods.NifShowTip,
         CallbackMessage = NativeMethods.WmTrayIcon,
         Icon = NativeMethods.LoadIcon(0, new nint(32516)),
-        Tip = "Codex Limit Reminder — right-click for options",
+        Tip = "Codex limits — left-click to show or hide",
         Info = string.Empty,
         InfoTitle = string.Empty
     };
@@ -270,7 +299,12 @@ internal sealed class TrayApplication : IDisposable
 
         try
         {
-            NativeMethods.AppendMenu(menu, NativeMethods.MfString | NativeMethods.MfDefault, MenuSettings, "Settings…");
+            NativeMethods.AppendMenu(
+                menu,
+                NativeMethods.MfString | NativeMethods.MfDefault,
+                MenuToggleWidget,
+                _widgetVisible ? "Hide floating limits" : "Show floating limits");
+            NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuSettings, "Settings…");
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuRefresh, "Refresh Codex status");
             NativeMethods.AppendMenu(menu, NativeMethods.MfSeparator, 0, null);
             NativeMethods.AppendMenu(menu, NativeMethods.MfString, MenuTestSummary, "Test daily limit summary");
@@ -300,6 +334,9 @@ internal sealed class TrayApplication : IDisposable
     {
         switch (command)
         {
+            case MenuToggleWidget:
+                ToggleWidgetVisibility();
+                break;
             case MenuSettings:
                 ShowSettings();
                 break;
@@ -314,6 +351,453 @@ internal sealed class TrayApplication : IDisposable
                 break;
         }
     }
+
+    private void EnsureWidgetWindow()
+    {
+        if (_widgetWindow != 0)
+        {
+            return;
+        }
+
+        uint dpi = Math.Max(96, NativeMethods.GetDpiForSystem());
+        WidgetSize logicalSize = WidgetLayout.GetLogicalSize(_widgetExpanded, _limits.Count);
+        var size = new WidgetSize(Scale(logicalSize.Width, dpi), Scale(logicalSize.Height, dpi));
+        WidgetPlacement? saved = WidgetPlacementStore.Load();
+        NativeMethods.Point anchor;
+        if (saved is WidgetPlacement placement)
+        {
+            anchor = new NativeMethods.Point { X = placement.X, Y = placement.Y };
+        }
+        else
+        {
+            NativeMethods.GetCursorPos(out anchor);
+        }
+
+        WidgetRectangle work = ToWidgetRectangle(GetMonitorInfo(anchor).Work);
+        WidgetRectangle bounds = saved is WidgetPlacement savedPlacement
+            ? WidgetLayout.PlaceSaved(savedPlacement.X, savedPlacement.Y, size, work)
+            : WidgetLayout.PlaceAtBottomRight(size, work);
+
+        _widgetWindow = CreateRequiredWindow(
+            NativeMethods.WsExToolWindow | NativeMethods.WsExTopmost | NativeMethods.WsExLayered,
+            NativeMethods.WidgetWindowClass,
+            "Codex live limits",
+            NativeMethods.WsPopup,
+            bounds.Left,
+            bounds.Top,
+            bounds.Width,
+            bounds.Height,
+            0,
+            0);
+
+        NativeMethods.SetLayeredWindowAttributes(_widgetWindow, 0, 242, NativeMethods.LwaAlpha);
+        ApplyWidgetShape();
+    }
+
+    private void CreateWidgetControls(nint window)
+    {
+        uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(window));
+        RecreateWidgetFonts();
+
+        nint toggle = CreateControl(
+            "BUTTON",
+            _widgetExpanded ? "Collapse" : "More",
+            NativeMethods.BsPushButton | NativeMethods.WsTabStop,
+            0,
+            0,
+            74,
+            28,
+            window,
+            WidgetToggleControl,
+            dpi);
+        ApplyFont(toggle, _widgetBodyFont);
+        LayoutWidgetButton();
+    }
+
+    private void RecreateWidgetFonts()
+    {
+        if (_widgetWindow == 0)
+        {
+            return;
+        }
+
+        DeleteFont(ref _widgetBodyFont);
+        DeleteFont(ref _widgetMetricFont);
+        DeleteFont(ref _widgetTitleFont);
+        uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
+        _widgetTitleFont = CreateSegoeFont(11, 600, dpi);
+        _widgetMetricFont = CreateSegoeFont(22, 600, dpi);
+        _widgetBodyFont = CreateSegoeFont(10, 400, dpi);
+        nint toggle = NativeMethods.GetDlgItem(_widgetWindow, WidgetToggleControl);
+        if (toggle != 0)
+        {
+            ApplyFont(toggle, _widgetBodyFont);
+        }
+    }
+
+    private void ShowWidget()
+    {
+        EnsureWidgetWindow();
+        _widgetVisible = true;
+        ResizeWidget();
+    }
+
+    private void HideWidget()
+    {
+        if (_widgetWindow == 0)
+        {
+            return;
+        }
+
+        _widgetVisible = false;
+        NativeMethods.ShowWindow(_widgetWindow, NativeMethods.SwHide);
+        ActivityLog.Write("Floating limit widget hidden; tray monitoring remains active.");
+    }
+
+    private void ToggleWidgetVisibility()
+    {
+        if (_widgetVisible)
+        {
+            HideWidget();
+        }
+        else
+        {
+            ShowWidget();
+        }
+    }
+
+    private void ToggleWidgetExpanded()
+    {
+        SetWidgetExpanded(!_widgetExpanded);
+    }
+
+    private void SetWidgetExpanded(bool expanded)
+    {
+        _widgetExpanded = expanded;
+        NativeMethods.SetWindowText(
+            NativeMethods.GetDlgItem(_widgetWindow, WidgetToggleControl),
+            _widgetExpanded ? "Collapse" : "More");
+        ResizeWidget();
+        ActivityLog.Write($"Floating limit widget {(_widgetExpanded ? "expanded" : "collapsed")}.");
+    }
+
+    private void ResizeWidget()
+    {
+        if (_widgetWindow == 0)
+        {
+            return;
+        }
+
+        uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
+        WidgetSize logicalSize = WidgetLayout.GetLogicalSize(_widgetExpanded, _limits.Count);
+        var desired = new WidgetSize(Scale(logicalSize.Width, dpi), Scale(logicalSize.Height, dpi));
+        if (!NativeMethods.GetWindowRect(_widgetWindow, out NativeMethods.Rect currentRect))
+        {
+            return;
+        }
+
+        var anchor = new NativeMethods.Point { X = currentRect.Left, Y = currentRect.Top };
+        WidgetRectangle work = ToWidgetRectangle(GetMonitorInfo(anchor).Work);
+        WidgetRectangle target = WidgetLayout.ResizeFromBottomRight(ToWidgetRectangle(currentRect), desired, work);
+        uint flags = NativeMethods.SwpNoActivate | (_widgetVisible ? NativeMethods.SwpShowWindow : 0);
+        NativeMethods.SetWindowPos(
+            _widgetWindow,
+            NativeMethods.HwndTopmost,
+            target.Left,
+            target.Top,
+            target.Width,
+            target.Height,
+            flags);
+        ApplyWidgetShape();
+        LayoutWidgetButton();
+        NativeMethods.InvalidateRect(_widgetWindow, 0, true);
+    }
+
+    private void LayoutWidgetButton()
+    {
+        if (_widgetWindow == 0 || !NativeMethods.GetClientRect(_widgetWindow, out NativeMethods.Rect client))
+        {
+            return;
+        }
+
+        uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
+        int width = Scale(_widgetExpanded ? 78 : 58, dpi);
+        int height = Scale(28, dpi);
+        NativeMethods.SetWindowPos(
+            NativeMethods.GetDlgItem(_widgetWindow, WidgetToggleControl),
+            0,
+            client.Right - width - Scale(12, dpi),
+            Scale(12, dpi),
+            width,
+            height,
+            NativeMethods.SwpNoActivate | NativeMethods.SwpNoZOrder);
+    }
+
+    private void ApplyWidgetShape()
+    {
+        if (_widgetWindow == 0 || !NativeMethods.GetClientRect(_widgetWindow, out NativeMethods.Rect client))
+        {
+            return;
+        }
+
+        uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
+        int radius = Scale(12, dpi);
+        nint region = NativeMethods.CreateRoundRectRgn(0, 0, client.Width + 1, client.Height + 1, radius, radius);
+        if (region != 0 && NativeMethods.SetWindowRgn(_widgetWindow, region, true) == 0)
+        {
+            NativeMethods.DeleteObject(region);
+        }
+    }
+
+    private void PaintWidget(nint window)
+    {
+        nint deviceContext = NativeMethods.BeginPaint(window, out NativeMethods.PaintStruct paint);
+        try
+        {
+            NativeMethods.GetClientRect(window, out NativeMethods.Rect client);
+            NativeMethods.FillRect(deviceContext, ref client, NativeMethods.GetSysColorBrush(NativeMethods.ColorWindow));
+            NativeMethods.SetBkMode(deviceContext, NativeMethods.Transparent);
+            NativeMethods.SetTextColor(deviceContext, NativeMethods.GetSysColor(NativeMethods.ColorWindowText));
+
+            uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(window));
+            int margin = Scale(16, dpi);
+            int buttonReserve = Scale(_widgetExpanded ? 104 : 84, dpi);
+            nint previous = NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+
+            if (_widgetExpanded)
+            {
+                PaintExpandedWidget(deviceContext, client, margin, buttonReserve, dpi);
+            }
+            else
+            {
+                PaintCollapsedWidget(deviceContext, client, margin, buttonReserve, dpi);
+            }
+
+            NativeMethods.SelectObject(deviceContext, previous);
+        }
+        finally
+        {
+            NativeMethods.EndPaint(window, ref paint);
+        }
+    }
+
+    private void PaintCollapsedWidget(nint deviceContext, NativeMethods.Rect client, int margin, int buttonReserve, uint dpi)
+    {
+        CodexRateLimitWindow? primary = SelectPrimaryLimit();
+        var label = new NativeMethods.Rect
+        {
+            Left = margin,
+            Top = Scale(10, dpi),
+            Right = client.Right - buttonReserve,
+            Bottom = Scale(36, dpi)
+        };
+        NativeMethods.SelectObject(deviceContext, _widgetTitleFont);
+        NativeMethods.DrawText(
+            deviceContext,
+            primary is null ? "Codex limits" : $"{ShortWidgetName(primary)} · {primary.WindowLabel}",
+            -1,
+            ref label,
+            NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
+
+        var metric = new NativeMethods.Rect
+        {
+            Left = margin,
+            Top = Scale(36, dpi),
+            Right = client.Right - margin,
+            Bottom = Scale(76, dpi)
+        };
+        NativeMethods.SelectObject(deviceContext, _widgetMetricFont);
+        NativeMethods.DrawText(
+            deviceContext,
+            primary is null ? "Connecting…" : $"{FormatPercentage(primary.RemainingPercent)}% left",
+            -1,
+            ref metric,
+            NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtNoPrefix);
+
+        var detail = new NativeMethods.Rect
+        {
+            Left = margin,
+            Top = Scale(76, dpi),
+            Right = client.Right - margin,
+            Bottom = Scale(101, dpi)
+        };
+        NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+        NativeMethods.DrawText(
+            deviceContext,
+            primary is null
+                ? "Waiting for the signed-in Codex session"
+                : $"{FormatPercentage(primary.NormalizedUsedPercent)}% used · resets {FormatWidgetReset(primary)}",
+            -1,
+            ref detail,
+            NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
+
+        PaintProgressBar(deviceContext, client, margin, client.Bottom - Scale(8, dpi), primary?.RemainingPercent ?? 0, dpi);
+    }
+
+    private void PaintExpandedWidget(nint deviceContext, NativeMethods.Rect client, int margin, int buttonReserve, uint dpi)
+    {
+        var heading = new NativeMethods.Rect
+        {
+            Left = margin,
+            Top = Scale(10, dpi),
+            Right = client.Right - buttonReserve,
+            Bottom = Scale(42, dpi)
+        };
+        NativeMethods.SelectObject(deviceContext, _widgetTitleFont);
+        NativeMethods.DrawText(
+            deviceContext,
+            "Codex limits",
+            -1,
+            ref heading,
+            NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtNoPrefix);
+
+        int rowsTop = Scale(48, dpi);
+        int footerHeight = Scale(30, dpi);
+        int available = Math.Max(1, client.Bottom - footerHeight - rowsTop);
+        int rowCount = Math.Max(1, _limits.Count);
+        int rowHeight = available / rowCount;
+
+        if (_limits.Count == 0)
+        {
+            var waiting = new NativeMethods.Rect
+            {
+                Left = margin,
+                Top = rowsTop,
+                Right = client.Right - margin,
+                Bottom = client.Bottom - footerHeight
+            };
+            NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+            NativeMethods.DrawText(
+                deviceContext,
+                "Connecting to the signed-in Codex session…",
+                -1,
+                ref waiting,
+                NativeMethods.DtVCenter | NativeMethods.DtWordBreak | NativeMethods.DtNoPrefix);
+        }
+        else
+        {
+            for (int index = 0; index < _limits.Count; index++)
+            {
+                CodexRateLimitWindow limit = _limits[index];
+                int top = rowsTop + index * rowHeight;
+                var name = new NativeMethods.Rect
+                {
+                    Left = margin,
+                    Top = top,
+                    Right = client.Right - margin,
+                    Bottom = top + Scale(22, dpi)
+                };
+                NativeMethods.SelectObject(deviceContext, _widgetTitleFont);
+                NativeMethods.DrawText(
+                    deviceContext,
+                    $"{ShortWidgetName(limit)} · {limit.WindowLabel}",
+                    -1,
+                    ref name,
+                    NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
+
+                var values = new NativeMethods.Rect
+                {
+                    Left = margin,
+                    Top = top + Scale(21, dpi),
+                    Right = client.Right - margin,
+                    Bottom = top + Scale(46, dpi)
+                };
+                NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+                NativeMethods.DrawText(
+                    deviceContext,
+                    $"{FormatPercentage(limit.NormalizedUsedPercent)}% used · {FormatPercentage(limit.RemainingPercent)}% left · resets {FormatWidgetReset(limit)}",
+                    -1,
+                    ref values,
+                    NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
+
+                PaintProgressBar(
+                    deviceContext,
+                    client,
+                    margin,
+                    Math.Min(top + Scale(53, dpi), client.Bottom - footerHeight - Scale(5, dpi)),
+                    limit.RemainingPercent,
+                    dpi);
+            }
+        }
+
+        var footer = new NativeMethods.Rect
+        {
+            Left = margin,
+            Top = client.Bottom - footerHeight,
+            Right = client.Right - margin,
+            Bottom = client.Bottom
+        };
+        string footerText = _lastSuccessfulRefresh is DateTime refreshed
+            ? $"Live · updated {refreshed:HH:mm} · checks every 15 min"
+            : "Refreshing automatically…";
+        NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+        NativeMethods.DrawText(
+            deviceContext,
+            footerText,
+            -1,
+            ref footer,
+            NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
+    }
+
+    private static void PaintProgressBar(
+        nint deviceContext,
+        NativeMethods.Rect client,
+        int margin,
+        int top,
+        double remainingPercent,
+        uint dpi)
+    {
+        int height = Math.Max(Scale(4, dpi), 2);
+        var track = new NativeMethods.Rect
+        {
+            Left = margin,
+            Top = top,
+            Right = client.Right - margin,
+            Bottom = top + height
+        };
+        NativeMethods.FillRect(deviceContext, ref track, NativeMethods.GetSysColorBrush(NativeMethods.ColorButtonFace));
+        int fillWidth = (int)Math.Round(track.Width * Math.Clamp(remainingPercent, 0, 100) / 100.0);
+        if (fillWidth <= 0)
+        {
+            return;
+        }
+
+        var fill = track;
+        fill.Right = fill.Left + fillWidth;
+        NativeMethods.FillRect(deviceContext, ref fill, NativeMethods.GetSysColorBrush(NativeMethods.ColorHighlight));
+    }
+
+    private CodexRateLimitWindow? SelectPrimaryLimit() =>
+        _limits.FirstOrDefault(limit => limit.LimitId.Equals("codex", StringComparison.OrdinalIgnoreCase) && limit.IsWeekly)
+        ?? _limits.FirstOrDefault(limit => limit.IsWeekly)
+        ?? _limits.FirstOrDefault();
+
+    private static string ShortWidgetName(CodexRateLimitWindow limit) =>
+        limit.LimitId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+            ? "General Codex"
+            : limit.DisplayName.Replace("GPT-5.3-Codex-", string.Empty, StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatWidgetReset(CodexRateLimitWindow limit)
+    {
+        DateTime reset = limit.ResetsAt.ToLocalTime().DateTime;
+        DateTime today = DateTime.Today;
+        return reset.Date == today
+            ? $"today {reset:HH:mm}"
+            : reset.Date == today.AddDays(1)
+                ? $"tomorrow {reset:HH:mm}"
+                : $"{reset:ddd d MMM · HH:mm}";
+    }
+
+    private void SaveWidgetPlacement()
+    {
+        if (_widgetWindow != 0 && NativeMethods.GetWindowRect(_widgetWindow, out NativeMethods.Rect rectangle))
+        {
+            WidgetPlacementStore.Save(rectangle.Left, rectangle.Top);
+        }
+    }
+
+    private static WidgetRectangle ToWidgetRectangle(NativeMethods.Rect rectangle) =>
+        new(rectangle.Left, rectangle.Top, rectangle.Right, rectangle.Bottom);
 
     private void ShowSettings()
     {
@@ -733,6 +1217,7 @@ internal sealed class TrayApplication : IDisposable
             _limits = monitor.States.Select(state => state.Limit).ToArray();
             LimitStateStore.Save(_limitStates);
             _refreshFailureCount = 0;
+            _lastSuccessfulRefresh = DateTime.Now;
             _connectionStatus = $"Connected automatically to Codex · {_limits.Count} live clocks";
             ActivityLog.Write($"Codex refresh succeeded: {string.Join(" | ", _limits.Select(FormatLogLimit))}.");
             ScheduleRateLimitRefresh(TimeSpan.FromMinutes(15));
@@ -788,6 +1273,7 @@ internal sealed class TrayApplication : IDisposable
 
         UpdateCodexStatusControls();
         UpdateNextReminderText();
+        ResizeWidget();
     }
 
     private void ScheduleRateLimitRefresh(TimeSpan delay)
@@ -1048,6 +1534,14 @@ internal sealed class TrayApplication : IDisposable
             case LaunchCommandKind.TestSummary:
                 ShowTestSummary();
                 break;
+            case LaunchCommandKind.ShowWidgetExpanded:
+                ShowWidget();
+                SetWidgetExpanded(true);
+                break;
+            case LaunchCommandKind.ShowWidgetCollapsed:
+                ShowWidget();
+                SetWidgetExpanded(false);
+                break;
             default:
                 ShowSettings();
                 break;
@@ -1079,7 +1573,7 @@ internal sealed class TrayApplication : IDisposable
                 }
                 else if (eventCode is NativeMethods.NinSelect or NativeMethods.WmLButtonUp)
                 {
-                    app.ShowSettings();
+                    app.ToggleWidgetVisibility();
                 }
 
                 return 0;
@@ -1104,6 +1598,62 @@ internal sealed class TrayApplication : IDisposable
                 return 0;
             case NativeMethods.WmRateLimitRefreshComplete:
                 app.CompleteRateLimitRefresh();
+                return 0;
+        }
+
+        return NativeMethods.DefWindowProc(window, message, wParam, lParam);
+    }
+
+    private static nint WidgetWindowProcedure(nint window, uint message, nuint wParam, nint lParam)
+    {
+        TrayApplication? app = Current;
+        if (app is null)
+        {
+            return NativeMethods.DefWindowProc(window, message, wParam, lParam);
+        }
+
+        switch (message)
+        {
+            case NativeMethods.WmCreate:
+                app._widgetWindow = window;
+                app.CreateWidgetControls(window);
+                return 0;
+            case NativeMethods.WmSize:
+                app.ApplyWidgetShape();
+                app.LayoutWidgetButton();
+                NativeMethods.InvalidateRect(window, 0, true);
+                return 0;
+            case NativeMethods.WmPaint:
+                app.PaintWidget(window);
+                return 0;
+            case NativeMethods.WmEraseBackground:
+                return 1;
+            case NativeMethods.WmCommand:
+                if ((int)(wParam & 0xFFFF) == WidgetToggleControl)
+                {
+                    app.ToggleWidgetExpanded();
+                    return 0;
+                }
+
+                break;
+            case NativeMethods.WmNcHitTest:
+                nint hit = NativeMethods.DefWindowProc(window, message, wParam, lParam);
+                return hit == NativeMethods.HtClient ? NativeMethods.HtCaption : hit;
+            case NativeMethods.WmExitSizeMove:
+                app.SaveWidgetPlacement();
+                return 0;
+            case NativeMethods.WmDisplayChange:
+                app.ResizeWidget();
+                return 0;
+            case NativeMethods.WmDpiChanged:
+                app.RecreateWidgetFonts();
+                app.ResizeWidget();
+                return 0;
+            case NativeMethods.WmContextMenu:
+                app.ShowTrayMenu();
+                return 0;
+            case NativeMethods.WmClose:
+                app.HideWidget();
                 return 0;
         }
 

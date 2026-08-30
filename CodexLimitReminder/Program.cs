@@ -46,7 +46,9 @@ internal enum LaunchCommandKind
 {
     Background = 0,
     ShowSettings = 1,
-    TestSummary = 2
+    TestSummary = 2,
+    ShowWidgetExpanded = 3,
+    ShowWidgetCollapsed = 4
 }
 
 internal readonly record struct LaunchCommand(LaunchCommandKind Kind)
@@ -64,6 +66,16 @@ internal readonly record struct LaunchCommand(LaunchCommandKind Kind)
         if (args.Any(value => value.Equals("--show-settings", StringComparison.OrdinalIgnoreCase)))
         {
             return new(LaunchCommandKind.ShowSettings);
+        }
+
+        if (args.Any(value => value.Equals("--show-widget-expanded", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new(LaunchCommandKind.ShowWidgetExpanded);
+        }
+
+        if (args.Any(value => value.Equals("--show-widget-collapsed", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new(LaunchCommandKind.ShowWidgetCollapsed);
         }
 
         return new(LaunchCommandKind.Background);

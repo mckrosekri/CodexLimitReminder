@@ -13,5 +13,6 @@
     <Compile Include="..\CodexLimitReminder\LimitMonitor.cs" Link="LimitMonitor.cs" />
     <Compile Include="..\CodexLimitReminder\CodexRateLimitParser.cs" Link="CodexRateLimitParser.cs" />
     <Compile Include="..\CodexLimitReminder\StartupRegistration.cs" Link="StartupRegistration.cs" />
+    <Compile Include="..\CodexLimitReminder\WidgetLayout.cs" Link="WidgetLayout.cs" />
   </ItemGroup>
 </Project>
