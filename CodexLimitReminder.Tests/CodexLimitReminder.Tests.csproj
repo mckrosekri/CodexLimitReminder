@@ -10,6 +10,8 @@
     <Compile Include="..\CodexLimitReminder\AppSettings.cs" Link="AppSettings.cs" />
     <Compile Include="..\CodexLimitReminder\CodexRateLimitWindow.cs" Link="CodexRateLimitWindow.cs" />
     <Compile Include="..\CodexLimitReminder\DailyReminderScheduler.cs" Link="DailyReminderScheduler.cs" />
+    <Compile Include="..\CodexLimitReminder\EstimatedUsageGroup.cs" Link="EstimatedUsageGroup.cs" />
+    <Compile Include="..\CodexLimitReminder\EstimatedUsageTracker.cs" Link="EstimatedUsageTracker.cs" />
     <Compile Include="..\CodexLimitReminder\LimitMonitor.cs" Link="LimitMonitor.cs" />
     <Compile Include="..\CodexLimitReminder\ResetCountdownFormatter.cs" Link="ResetCountdownFormatter.cs" />
     <Compile Include="..\CodexLimitReminder\CodexRateLimitParser.cs" Link="CodexRateLimitParser.cs" />

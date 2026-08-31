@@ -24,8 +24,13 @@ var tests = new (string Name, Action Run)[]
     ("reset advance with near-full recovery is detected", ResetAdvanceRecoveryIsDetected),
     ("warning thresholds restart after recovery", ThresholdRestartsAfterRecovery),
     ("multiple limit states remain independent", MultipleLimitStatesAreIndependent),
+    ("first observation creates an estimated baseline", FirstObservationCreatesBaseline),
+    ("usage increase creates an independent estimated group", UsageIncreaseCreatesIndependentGroup),
+    ("usage recovery removes the earliest estimated group", UsageRecoveryRemovesEarliestGroup),
+    ("estimated groups remain isolated by limit", EstimatedGroupsRemainIsolatedByLimit),
     ("collapsed widget remains compact", CollapsedWidgetRemainsCompact),
     ("expanded widget grows for live limits", ExpandedWidgetGrowsForLimits),
+    ("expanded widget grows for estimated groups", ExpandedWidgetGrowsForEstimatedGroups),
     ("widget placement stays inside the work area", WidgetPlacementStaysInsideWorkArea),
     ("widget resize keeps its bottom-right anchor", WidgetResizeKeepsBottomRightAnchor),
     ("startup command is quoted and windowless", StartupCommandIsQuoted),
@@ -95,6 +100,13 @@ static void ExpandedWidgetGrowsForLimits()
     WidgetSize expanded = WidgetLayout.GetLogicalSize(expanded: true, limitCount: 3);
     True(expanded.Width > collapsed.Width);
     True(expanded.Height > collapsed.Height);
+}
+
+static void ExpandedWidgetGrowsForEstimatedGroups()
+{
+    WidgetSize withoutGroups = WidgetLayout.GetLogicalSize(expanded: true, limitCount: 3);
+    WidgetSize withGroups = WidgetLayout.GetLogicalSize(expanded: true, limitCount: 3, estimatedGroupLines: 6);
+    Equal(96, withGroups.Height - withoutGroups.Height);
 }
 
 static void WidgetPlacementStaysInsideWorkArea()
@@ -271,6 +283,79 @@ static void MultipleLimitStatesAreIndependent()
     Equal(2, result.Events.Count);
     Equal(50, result.Events[0].Threshold);
     Equal(75, result.Events[1].Threshold);
+}
+
+static void FirstObservationCreatesBaseline()
+{
+    DateTimeOffset now = new(2026, 8, 31, 10, 0, 0, TimeSpan.Zero);
+    EstimatedUsageGroup group = Single(EstimatedUsageTracker.Reconcile([], [], [General(5)], now));
+    Equal(5d, group.EstimatedPercent);
+    Equal(true, group.IsBaseline);
+    Equal(General().ResetsAtUnixSeconds, group.EstimatedReleaseAtUnixSeconds);
+}
+
+static void UsageIncreaseCreatesIndependentGroup()
+{
+    DateTimeOffset now = new(2026, 8, 31, 10, 0, 0, TimeSpan.Zero);
+    CodexRateLimitWindow previous = General(5);
+    var baseline = new EstimatedUsageGroup(
+        previous.StateKey,
+        5,
+        now.AddHours(-1).ToUnixTimeSeconds(),
+        previous.ResetsAtUnixSeconds,
+        IsBaseline: true);
+
+    IReadOnlyList<EstimatedUsageGroup> groups = EstimatedUsageTracker.Reconcile(
+        [baseline],
+        [previous],
+        [General(7)],
+        now);
+
+    Equal(2, groups.Count);
+    EstimatedUsageGroup observed = groups.Single(group => !group.IsBaseline);
+    Equal(2d, observed.EstimatedPercent);
+    Equal(now.ToUnixTimeSeconds(), observed.ObservedAtUnixSeconds);
+}
+
+static void UsageRecoveryRemovesEarliestGroup()
+{
+    DateTimeOffset now = new(2026, 8, 31, 10, 0, 0, TimeSpan.Zero);
+    CodexRateLimitWindow previous = General(7);
+    var oldest = new EstimatedUsageGroup(
+        previous.StateKey,
+        3,
+        now.AddHours(-2).ToUnixTimeSeconds(),
+        now.AddDays(1).ToUnixTimeSeconds(),
+        IsBaseline: false);
+    var newest = new EstimatedUsageGroup(
+        previous.StateKey,
+        4,
+        now.AddHours(-1).ToUnixTimeSeconds(),
+        now.AddDays(2).ToUnixTimeSeconds(),
+        IsBaseline: false);
+
+    EstimatedUsageGroup remaining = Single(EstimatedUsageTracker.Reconcile(
+        [oldest, newest],
+        [previous],
+        [General(4)],
+        now));
+
+    Equal(4d, remaining.EstimatedPercent);
+    Equal(newest.ObservedAtUnixSeconds, remaining.ObservedAtUnixSeconds);
+}
+
+static void EstimatedGroupsRemainIsolatedByLimit()
+{
+    DateTimeOffset now = new(2026, 8, 31, 10, 0, 0, TimeSpan.Zero);
+    IReadOnlyList<EstimatedUsageGroup> groups = EstimatedUsageTracker.Reconcile(
+        [],
+        [],
+        [General(5), SparkWeekly(3)],
+        now);
+
+    Equal(2, groups.Count);
+    Equal(1, groups.Count(group => group.LimitStateKey == General().StateKey));
+    Equal(1, groups.Count(group => group.LimitStateKey == SparkWeekly().StateKey));
 }
 
 static void StartupCommandIsQuoted()

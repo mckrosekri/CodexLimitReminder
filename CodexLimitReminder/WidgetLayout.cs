@@ -12,8 +12,13 @@ internal static class WidgetLayout
 {
     internal const int EdgeMargin = 16;
 
-    internal static WidgetSize GetLogicalSize(bool expanded, int limitCount) => expanded
-        ? new WidgetSize(348, Math.Clamp(66 + Math.Max(1, limitCount) * 50, 166, 366))
+    internal static WidgetSize GetLogicalSize(bool expanded, int limitCount, int estimatedGroupLines = 0) => expanded
+        ? new WidgetSize(
+            348,
+            Math.Clamp(
+                66 + Math.Max(1, limitCount) * 50 + Math.Max(0, estimatedGroupLines) * 16,
+                166,
+                520))
         : new WidgetSize(260, 84);
 
     internal static WidgetRectangle PlaceAtBottomRight(WidgetSize size, WidgetRectangle workArea) =>

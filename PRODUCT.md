@@ -27,6 +27,7 @@ Do not resemble a full analytics dashboard, a large permanent desktop panel, a g
 3. Stay out of the user's way without hiding important risk.
 4. Reflect exactly what Codex reports; never imply a fixed calendar cycle.
 5. Preserve user control through clear keyboard, tray, expand, collapse, and hide paths.
+6. Mark locally inferred release groups with `≈` and keep them visually subordinate to the authoritative Codex reset.
 
 ## Accessibility & Inclusion
 

@@ -29,6 +29,7 @@ internal sealed class TrayApplication : IDisposable
     private const int HideControl = 209;
     private const int AlertCloseControl = 301;
     private const int WidgetToggleControl = 401;
+    private const int MaximumVisibleEstimatedGroupsPerLimit = 3;
 
     private static readonly NativeMethods.WindowProc MessageProcedure = MessageWindowProcedure;
     private static readonly NativeMethods.WindowProc SettingsProcedure = SettingsWindowProcedure;
@@ -50,6 +51,7 @@ internal sealed class TrayApplication : IDisposable
     private AppSettings _settings;
     private IReadOnlyList<MonitoredLimitState> _limitStates;
     private IReadOnlyList<CodexRateLimitWindow> _limits;
+    private IReadOnlyList<EstimatedUsageGroup> _estimatedUsageGroups;
     private RateLimitRefreshResult? _pendingRefresh;
     private nint _messageWindow;
     private nint _settingsWindow;
@@ -88,6 +90,7 @@ internal sealed class TrayApplication : IDisposable
         _settings = SettingsStore.Load();
         _limitStates = LimitStateStore.Load();
         _limits = _limitStates.Select(state => state.Limit).ToArray();
+        _estimatedUsageGroups = EstimatedUsageGroupStore.Load();
         ActivityLog.Write($"Loaded settings: configured={_settings.IsConfigured}, reminder={FormatTime(_settings.ReminderTime)}.");
         if (_limits.Count > 0)
         {
@@ -371,7 +374,10 @@ internal sealed class TrayApplication : IDisposable
         }
 
         uint dpi = Math.Max(96, NativeMethods.GetDpiForSystem());
-        WidgetSize logicalSize = WidgetLayout.GetLogicalSize(_widgetExpanded, _limits.Count);
+        WidgetSize logicalSize = WidgetLayout.GetLogicalSize(
+            _widgetExpanded,
+            _limits.Count,
+            CountEstimatedGroupLines());
         var size = new WidgetSize(Scale(logicalSize.Width, dpi), Scale(logicalSize.Height, dpi));
         WidgetPlacement? saved = WidgetPlacementStore.Load();
         NativeMethods.Point anchor;
@@ -501,7 +507,10 @@ internal sealed class TrayApplication : IDisposable
         }
 
         uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
-        WidgetSize logicalSize = WidgetLayout.GetLogicalSize(_widgetExpanded, _limits.Count);
+        WidgetSize logicalSize = WidgetLayout.GetLogicalSize(
+            _widgetExpanded,
+            _limits.Count,
+            CountEstimatedGroupLines());
         var desired = new WidgetSize(Scale(logicalSize.Width, dpi), Scale(logicalSize.Height, dpi));
         if (!NativeMethods.GetWindowRect(_widgetWindow, out NativeMethods.Rect currentRect))
         {
@@ -722,9 +731,6 @@ internal sealed class TrayApplication : IDisposable
 
         int rowsTop = Scale(38, dpi);
         int footerHeight = Scale(22, dpi);
-        int available = Math.Max(1, client.Bottom - footerHeight - rowsTop);
-        int rowCount = Math.Max(1, _limits.Count);
-        int rowHeight = available / rowCount;
 
         if (_limits.Count == 0)
         {
@@ -746,10 +752,10 @@ internal sealed class TrayApplication : IDisposable
         }
         else
         {
-            for (int index = 0; index < _limits.Count; index++)
+            int top = rowsTop;
+            foreach (CodexRateLimitWindow limit in _limits)
             {
-                CodexRateLimitWindow limit = _limits[index];
-                int top = rowsTop + index * rowHeight;
+                IReadOnlyList<string> estimatedRows = GetEstimatedUsageRows(limit);
                 var name = new NativeMethods.Rect
                 {
                     Left = margin,
@@ -782,13 +788,50 @@ internal sealed class TrayApplication : IDisposable
                     ref values,
                     NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
 
+                int estimatedTop = top + Scale(37, dpi);
+                if (estimatedRows.Count > 0)
+                {
+                    var guide = new NativeMethods.Rect
+                    {
+                        Left = margin + Scale(3, dpi),
+                        Top = estimatedTop + Scale(2, dpi),
+                        Right = margin + Scale(5, dpi),
+                        Bottom = estimatedTop + Scale(estimatedRows.Count * 16 - 2, dpi)
+                    };
+                    nint guideBrush = NativeMethods.CreateSolidBrush(WidgetTrackColor);
+                    NativeMethods.FillRect(deviceContext, ref guide, guideBrush);
+                    NativeMethods.DeleteObject(guideBrush);
+
+                    NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+                    NativeMethods.SetTextColor(deviceContext, WidgetMutedColor);
+                    for (int index = 0; index < estimatedRows.Count; index++)
+                    {
+                        var estimated = new NativeMethods.Rect
+                        {
+                            Left = margin + Scale(14, dpi),
+                            Top = estimatedTop + Scale(index * 16, dpi),
+                            Right = client.Right - margin,
+                            Bottom = estimatedTop + Scale((index + 1) * 16, dpi)
+                        };
+                        NativeMethods.DrawText(
+                            deviceContext,
+                            estimatedRows[index],
+                            -1,
+                            ref estimated,
+                            NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
+                    }
+                }
+
                 PaintProgressBar(
                     deviceContext,
                     client,
                     margin,
-                    Math.Min(top + Scale(42, dpi), client.Bottom - footerHeight - Scale(4, dpi)),
+                    Math.Min(
+                        top + Scale(42 + estimatedRows.Count * 16, dpi),
+                        client.Bottom - footerHeight - Scale(4, dpi)),
                     limit.RemainingPercent,
                     dpi);
+                top += Scale(50 + estimatedRows.Count * 16, dpi);
             }
         }
 
@@ -868,6 +911,43 @@ internal sealed class TrayApplication : IDisposable
 
     private static string FormatResetCountdown(CodexRateLimitWindow limit) =>
         ResetCountdownFormatter.Format(limit.ResetsAt, DateTimeOffset.Now);
+
+    private int CountEstimatedGroupLines() =>
+        _limits.Sum(limit => GetEstimatedUsageRows(limit).Count);
+
+    private IReadOnlyList<string> GetEstimatedUsageRows(CodexRateLimitWindow limit)
+    {
+        EstimatedUsageGroup[] groups = _estimatedUsageGroups
+            .Where(group => group.LimitStateKey.Equals(limit.StateKey, StringComparison.Ordinal))
+            .OrderBy(group => group.EstimatedReleaseAtUnixSeconds)
+            .ThenBy(group => group.ObservedAtUnixSeconds)
+            .ToArray();
+        if (groups.Length == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var rows = groups
+            .Take(MaximumVisibleEstimatedGroupsPerLimit)
+            .Select(FormatEstimatedUsageGroup)
+            .ToList();
+        int hidden = groups.Length - MaximumVisibleEstimatedGroupsPerLimit;
+        if (hidden > 0)
+        {
+            rows.Add($"≈ +{hidden} later observed {(hidden == 1 ? "group" : "groups")}");
+        }
+
+        return rows;
+    }
+
+    private static string FormatEstimatedUsageGroup(EstimatedUsageGroup group)
+    {
+        string amount = FormatPercentage(group.EstimatedPercent);
+        string countdown = ResetCountdownFormatter.Format(group.EstimatedReleaseAt, DateTimeOffset.Now);
+        return group.IsBaseline
+            ? $"≈ {amount}% baseline · by reset in {countdown}"
+            : $"≈ +{amount}% seen {group.ObservedAt.ToLocalTime():HH:mm} · est. in {countdown}";
+    }
 
     private void TickResetCountdowns()
     {
@@ -1314,6 +1394,16 @@ internal sealed class TrayApplication : IDisposable
         _refreshInProgress = false;
         if (result?.Limits is { Count: > 0 })
         {
+            IReadOnlyList<CodexRateLimitWindow> previousLimits = _limitStates
+                .Select(state => state.Limit)
+                .ToArray();
+            _estimatedUsageGroups = EstimatedUsageTracker.Reconcile(
+                _estimatedUsageGroups,
+                previousLimits,
+                result.Limits,
+                DateTimeOffset.Now);
+            EstimatedUsageGroupStore.Save(_estimatedUsageGroups);
+
             LimitMonitorResult monitor = LimitMonitor.Evaluate(_limitStates, result.Limits);
             _limitStates = monitor.States;
             _limits = monitor.States.Select(state => state.Limit).ToArray();
@@ -1322,6 +1412,7 @@ internal sealed class TrayApplication : IDisposable
             _lastSuccessfulRefresh = DateTime.Now;
             _connectionStatus = $"Connected automatically to Codex · {_limits.Count} live clocks";
             ActivityLog.Write($"Codex refresh succeeded: {string.Join(" | ", _limits.Select(FormatLogLimit))}.");
+            ActivityLog.Write($"Tracking {_estimatedUsageGroups.Count} local estimated release groups across live clocks.");
             ScheduleRateLimitRefresh(TimeSpan.FromMinutes(15));
 
             foreach (LimitMonitorEvent item in monitor.Events)

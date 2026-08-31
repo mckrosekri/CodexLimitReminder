@@ -6,6 +6,7 @@ A tiny, private floating Windows app that monitors every usage-limit clock expos
 - Semi-transparent and always on top, with no taskbar window or focus stealing.
 - Collapsed view shows the main weekly allowance, remaining percentage, exact reset time, and a live countdown.
 - Select **+** to expand every General and model-specific clock; select **−** to return to the compact view.
+- Expanded limits indent locally observed usage groups beneath their matching clock, including the observed time and estimated release countdown.
 - Drag the card anywhere on the desktop. Its position is remembered across restarts.
 - Full-screen, topmost alerts with a keyboard-accessible **Close reminder** button.
 - One daily summary at your chosen time, showing every live General and model-specific limit.
@@ -20,7 +21,7 @@ A tiny, private floating Windows app that monitors every usage-limit clock expos
 
 Codex exposes one current usage percentage, window duration, and authoritative next-reset timestamp for each quota bucket. It does not expose a separate expiry for every message or token cohort. Codex also exposes daily token-activity totals, but those totals cannot be mapped safely to a particular quota bucket or release time.
 
-The app therefore displays a live countdown to each server-reported reset instead of estimating per-token release times or assuming one Sunday-to-Sunday calendar cycle.
+The app always displays the live countdown to each server-reported reset. It also records each increase observed during its 15-minute checks as a local estimated group. These indented rows use `≈`, show when the increase was first seen, and estimate when it should be released from the bucket's reported window. Usage that predates tracking is shown as a baseline due by the server reset. These estimates never replace or override the authoritative reset.
 
 ## Alerts
 
@@ -69,6 +70,7 @@ Settings and deduplication state are stored under:
 ```text
 HKEY_CURRENT_USER\Software\CodexLimitReminder
 HKEY_CURRENT_USER\Software\CodexLimitReminder\LimitWindows
+HKEY_CURRENT_USER\Software\CodexLimitReminder\EstimatedUsageGroups
 ```
 
 Quiet startup uses:
