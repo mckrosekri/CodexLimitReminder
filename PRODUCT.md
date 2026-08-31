@@ -6,7 +6,7 @@ product
 
 ## Users
 
-Windows Codex users who need a passive, glanceable view of their live usage allowances while they work. The primary user keeps the app running all day and should not need to open Codex settings or calculate rolling reset dates manually.
+Windows Codex users who need a passive, glanceable view of their live usage allowances while they work. The primary user keeps the app running all day and should not need to open Codex settings or calculate reset countdowns manually.
 
 ## Product Purpose
 

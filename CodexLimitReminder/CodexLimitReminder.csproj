@@ -9,7 +9,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>CodexLimitReminder</AssemblyName>
     <RootNamespace>CodexLimitReminder</RootNamespace>
-    <Version>1.7.0</Version>
+    <Version>1.8.0</Version>
     <AssemblyTitle>Codex Limit Reminder</AssemblyTitle>
     <Description>A tiny floating Windows monitor for every live Codex usage limit.</Description>
   </PropertyGroup>

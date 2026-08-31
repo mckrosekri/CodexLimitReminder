@@ -4,23 +4,23 @@ A tiny, private floating Windows app that monitors every usage-limit clock expos
 
 - Ultra-compact 260×84 dark telemetry card with restrained neon-cyan status accents.
 - Semi-transparent and always on top, with no taskbar window or focus stealing.
-- Collapsed view shows the main weekly allowance, remaining percentage, and current reset time.
+- Collapsed view shows the main weekly allowance, remaining percentage, exact reset time, and a live countdown.
 - Select **+** to expand every General and model-specific clock; select **−** to return to the compact view.
 - Drag the card anywhere on the desktop. Its position is remembered across restarts.
 - Full-screen, topmost alerts with a keyboard-accessible **Close reminder** button.
 - One daily summary at your chosen time, showing every live General and model-specific limit.
 - Immediate weekly safety alerts at 50%, 75%, 90%, and 95% used.
-- Automatic alerts when a rolling weekly allowance materially recovers.
-- Tracks General Codex and separate model clocks such as GPT-5.3-Codex-Spark's five-hour and weekly limits.
+- Automatic alerts when a weekly allowance materially recovers.
+- Tracks General Codex and separate model clocks such as GPT-5.3-Codex-Spark's five-hour and weekly limits, with an independent countdown for every exposed bucket.
 - Checks Codex every 15 minutes, retries automatically after connection problems, and keeps the last live state offline.
 - Starts quietly at Windows sign-in through two independent per-user triggers and repairs both whenever it launches.
 - Native single-file x64 executable; no installer framework, bundled browser, cloud service, or separate runtime.
 
-## Why the app uses daily summaries
+## What Codex actually exposes
 
-Codex labels weekly windows as 10,080 minutes, but their displayed reset timestamps can move as older usage ages out. A fixed "day 6/day 7" reminder therefore is not reliable: the target can advance before the reminder date arrives.
+Codex exposes one current usage percentage, window duration, and authoritative next-reset timestamp for each quota bucket. It does not expose a separate expiry for every message or token cohort. Codex also exposes daily token-activity totals, but those totals cannot be mapped safely to a particular quota bucket or release time.
 
-This app treats weekly limits as rolling state. It reports the exact values Codex currently exposes instead of assuming one Sunday-to-Sunday cycle.
+The app therefore displays a live countdown to each server-reported reset instead of estimating per-token release times or assuming one Sunday-to-Sunday calendar cycle.
 
 ## Alerts
 
@@ -28,9 +28,9 @@ This app treats weekly limits as rolling state. It reports the exact values Code
 | --- | --- |
 | Daily summary | Once each local day at the configured time; if Windows starts late, it appears once later that day |
 | Weekly threshold | As soon as a 15-minute check first observes 50%, 75%, 90%, or 95% used |
-| Rolling recovery | As soon as a check observes a major usage drop, or a reset advances with a near-full recovery |
+| Allowance recovery | As soon as a check observes a major usage drop, or a reset advances with a near-full recovery |
 
-Every full-screen alert lists all current clocks with used percentage, remaining percentage, and the exact reset currently reported by Codex. Five-hour clocks appear in the daily summary but do not trigger the weekly percentage warnings.
+Every full-screen alert lists all current clocks with used percentage, remaining percentage, exact reset, and live time remaining. Five-hour clocks appear in the daily summary but do not trigger the weekly percentage warnings.
 
 ## Install
 
@@ -92,7 +92,7 @@ Requirements: Windows 10/11 x64 and the .NET 10 SDK with NativeAOT prerequisites
 .\scripts\build.ps1
 ```
 
-The script builds the solution, runs all parser/scheduler/rolling-state/startup tests, and publishes the native executable to `artifacts\win-x64`.
+The script builds the solution, runs all parser/scheduler/limit-state/startup tests, and publishes the native executable to `artifacts\win-x64`.
 
 Manual test hooks:
 

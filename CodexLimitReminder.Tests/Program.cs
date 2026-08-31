@@ -6,6 +6,9 @@ var tests = new (string Name, Action Run)[]
     ("parser rejects responses without limits", ParserRejectsMissingLimits),
     ("usage calculates remaining percentage", UsageCalculatesRemainingPercentage),
     ("usage percentages are safely clamped", UsagePercentagesAreClamped),
+    ("reset countdown formats multi-day windows", ResetCountdownFormatsDays),
+    ("reset countdown includes live seconds", ResetCountdownIncludesSeconds),
+    ("elapsed reset countdown is due now", ElapsedResetCountdownIsDueNow),
     ("daily summary is due after configured time", DailySummaryIsDue),
     ("daily summary waits until configured time", DailySummaryWaitsUntilTime),
     ("daily summary is not repeated", DailySummaryDoesNotRepeat),
@@ -16,7 +19,7 @@ var tests = new (string Name, Action Run)[]
     ("weekly warnings escalate from 50 to 75", UsageWarningEscalates),
     ("weekly warning is not repeated", UsageWarningDoesNotRepeat),
     ("five-hour clocks do not trigger weekly warnings", FiveHourClockDoesNotWarn),
-    ("major rolling recovery is detected", MajorRecoveryIsDetected),
+    ("major allowance recovery is detected", MajorRecoveryIsDetected),
     ("minor usage movement is not called a recovery", MinorDropIsNotRecovery),
     ("reset advance with near-full recovery is detected", ResetAdvanceRecoveryIsDetected),
     ("warning thresholds restart after recovery", ThresholdRestartsAfterRecovery),
@@ -150,6 +153,25 @@ static void UsagePercentagesAreClamped()
     Equal(0d, General(125).RemainingPercent);
     Equal(0d, General(-5).NormalizedUsedPercent);
     Equal(100d, General(double.NaN).RemainingPercent);
+}
+
+static void ResetCountdownFormatsDays()
+{
+    DateTimeOffset now = new(2026, 8, 31, 9, 30, 0, TimeSpan.FromHours(2));
+    Equal("6d 22h 30m", ResetCountdownFormatter.Format(now.AddDays(6).AddHours(22).AddMinutes(30), now));
+}
+
+static void ResetCountdownIncludesSeconds()
+{
+    DateTimeOffset now = new(2026, 8, 31, 9, 30, 0, TimeSpan.FromHours(2));
+    Equal("4h 29m 18s", ResetCountdownFormatter.Format(now.AddHours(4).AddMinutes(29).AddSeconds(18), now));
+    Equal("29m 18s", ResetCountdownFormatter.Format(now.AddMinutes(29).AddSeconds(18), now));
+}
+
+static void ElapsedResetCountdownIsDueNow()
+{
+    DateTimeOffset now = new(2026, 8, 31, 9, 30, 0, TimeSpan.FromHours(2));
+    Equal("due now", ResetCountdownFormatter.Format(now.AddSeconds(-1), now));
 }
 
 static void DailySummaryIsDue()

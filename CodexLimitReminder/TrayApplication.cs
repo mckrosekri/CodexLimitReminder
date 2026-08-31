@@ -10,6 +10,7 @@ internal sealed class TrayApplication : IDisposable
     private const uint TrayIconId = 1;
     private const nuint SchedulerTimerId = 1;
     private const nuint RateRefreshTimerId = 2;
+    private const nuint ResetCountdownTimerId = 3;
 
     private const int MenuSettings = 100;
     private const int MenuTestSummary = 101;
@@ -71,6 +72,7 @@ internal sealed class TrayApplication : IDisposable
     private bool _refreshInProgress;
     private int _refreshFailureCount;
     private DateTime? _lastSuccessfulRefresh;
+    private DateTime _lastCountdownRefreshRequest = DateTime.MinValue;
     private string _connectionStatus = "Connecting to Codex…";
     private string _alertEyebrow = "DAILY CODEX LIMIT SUMMARY";
     private string _alertTitle = "Your current Codex limits";
@@ -108,6 +110,7 @@ internal sealed class TrayApplication : IDisposable
         AddTrayIcon();
         EnsureWidgetWindow();
         ShowWidget();
+        NativeMethods.SetTimer(_messageWindow, ResetCountdownTimerId, 1000, 0);
         EvaluateDailySummary();
 
         if (!_settings.IsConfigured || initialCommand.Kind == LaunchCommandKind.ShowSettings)
@@ -167,6 +170,7 @@ internal sealed class TrayApplication : IDisposable
         {
             NativeMethods.KillTimer(_messageWindow, SchedulerTimerId);
             NativeMethods.KillTimer(_messageWindow, RateRefreshTimerId);
+            NativeMethods.KillTimer(_messageWindow, ResetCountdownTimerId);
         }
 
         _shutdown.Cancel();
@@ -654,7 +658,9 @@ internal sealed class TrayApplication : IDisposable
         NativeMethods.SetTextColor(deviceContext, WidgetMutedColor);
         NativeMethods.DrawText(
             deviceContext,
-            primary is null ? "Codex limits" : $"{ShortWidgetName(primary)} / {primary.WindowLabel}",
+            primary is null
+                ? "Codex limits"
+                : $"{ShortWidgetName(primary)} / {primary.WindowLabel} · {FormatWidgetReset(primary)}",
             -1,
             ref label,
             NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
@@ -688,7 +694,7 @@ internal sealed class TrayApplication : IDisposable
             deviceContext,
             primary is null
                 ? "Waiting for the signed-in Codex session"
-                : $"{FormatPercentage(primary.NormalizedUsedPercent)}% used · reset {FormatWidgetReset(primary)}",
+                : $"{FormatPercentage(primary.NormalizedUsedPercent)}% used · resets in {FormatResetCountdown(primary)}",
             -1,
             ref detail,
             NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
@@ -755,7 +761,7 @@ internal sealed class TrayApplication : IDisposable
                 NativeMethods.SetTextColor(deviceContext, WidgetTextColor);
                 NativeMethods.DrawText(
                     deviceContext,
-                    $"{ShortWidgetName(limit)} / {limit.WindowLabel}",
+                    $"{ShortWidgetName(limit)} / {limit.WindowLabel} · {FormatWidgetReset(limit)}",
                     -1,
                     ref name,
                     NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
@@ -771,7 +777,7 @@ internal sealed class TrayApplication : IDisposable
                 NativeMethods.SetTextColor(deviceContext, WidgetMutedColor);
                 NativeMethods.DrawText(
                     deviceContext,
-                    $"{FormatPercentage(limit.NormalizedUsedPercent)}% used · {FormatPercentage(limit.RemainingPercent)}% left · reset {FormatWidgetReset(limit)}",
+                    $"{FormatPercentage(limit.NormalizedUsedPercent)}% used · {FormatPercentage(limit.RemainingPercent)}% left · resets in {FormatResetCountdown(limit)}",
                     -1,
                     ref values,
                     NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
@@ -858,6 +864,30 @@ internal sealed class TrayApplication : IDisposable
             : reset.Date == today.AddDays(1)
                 ? $"tomorrow {reset:HH:mm}"
                 : $"{reset:d MMM HH:mm}";
+    }
+
+    private static string FormatResetCountdown(CodexRateLimitWindow limit) =>
+        ResetCountdownFormatter.Format(limit.ResetsAt, DateTimeOffset.Now);
+
+    private void TickResetCountdowns()
+    {
+        if (_widgetVisible && _widgetWindow != 0)
+        {
+            NativeMethods.InvalidateRect(_widgetWindow, 0, false);
+        }
+
+        if (_alertVisible && _alertWindow != 0)
+        {
+            NativeMethods.InvalidateRect(_alertWindow, 0, false);
+        }
+
+        DateTime now = DateTime.Now;
+        if (_limits.Any(limit => limit.ResetsAt <= DateTimeOffset.Now) &&
+            now - _lastCountdownRefreshRequest >= TimeSpan.FromMinutes(5))
+        {
+            _lastCountdownRefreshRequest = now;
+            BeginRateLimitRefresh();
+        }
     }
 
     private void SaveWidgetPlacement()
@@ -968,7 +998,7 @@ internal sealed class TrayApplication : IDisposable
 
         CreateControl(
             "STATIC",
-            "No API key or reset-day setup. Rolling recoveries and weekly thresholds are detected automatically.",
+            "No API key or reset-day setup. Allowance recoveries and weekly thresholds are detected automatically.",
             NativeMethods.SsLeft,
             30,
             362,
@@ -1133,7 +1163,7 @@ internal sealed class TrayApplication : IDisposable
             liveLimits);
         NativeMethods.SetWindowText(
             NativeMethods.GetDlgItem(_settingsWindow, UsageStatusControl),
-            "Daily summary · weekly alerts at 50/75/90/95% · rolling recovery alerts");
+            "Daily summary · weekly alerts at 50/75/90/95% · allowance recovery alerts");
     }
 
     private void UpdateNextReminderText()
@@ -1182,7 +1212,7 @@ internal sealed class TrayApplication : IDisposable
             ShowLimitAlert(
                 "DAILY CODEX LIMIT SUMMARY",
                 "Your current Codex limits",
-                "Live from your signed-in Codex account. Weekly limits are rolling and may recover in stages.",
+                "Live from your signed-in Codex account. Each countdown uses Codex's authoritative next-reset time.",
                 "daily summary");
         }
 
@@ -1320,10 +1350,10 @@ internal sealed class TrayApplication : IDisposable
                 else
                 {
                     ShowLimitAlert(
-                        "ROLLING LIMIT RECOVERY DETECTED",
+                        "LIMIT RECOVERY DETECTED",
                         $"{alertEvent.Limit.DisplayName} recovered {FormatPercentage(alertEvent.RecoveredPercent)}%",
-                        "Older usage aged out of the rolling window. The reset shown by Codex may move again as other usage ages out.",
-                        "rolling recovery alert");
+                        "Codex reports more capacity in this allowance. The next-reset time below is the authoritative server value.",
+                        "allowance recovery alert");
                 }
             }
 
@@ -1540,7 +1570,7 @@ internal sealed class TrayApplication : IDisposable
                     NativeMethods.SelectObject(deviceContext, _alertUsageFont);
                     NativeMethods.DrawText(
                         deviceContext,
-                        $"{FormatPercentage(limit.NormalizedUsedPercent)}% USED   ·   {FormatPercentage(limit.RemainingPercent)}% LEFT   ·   RESETS {reset:ddd d MMM HH:mm}",
+                        $"{FormatPercentage(limit.NormalizedUsedPercent)}% USED   ·   {FormatPercentage(limit.RemainingPercent)}% LEFT   ·   NEXT RESET {reset:ddd d MMM HH:mm}   ·   IN {FormatResetCountdown(limit).ToUpperInvariant()}",
                         -1,
                         ref value,
                         NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine);
@@ -1658,6 +1688,10 @@ internal sealed class TrayApplication : IDisposable
                 {
                     NativeMethods.KillTimer(app._messageWindow, RateRefreshTimerId);
                     app.BeginRateLimitRefresh();
+                }
+                else if (wParam == ResetCountdownTimerId)
+                {
+                    app.TickResetCountdowns();
                 }
 
                 return 0;
@@ -1833,7 +1867,8 @@ internal sealed class TrayApplication : IDisposable
             : limit.DisplayName.Replace("GPT-5.3-Codex-", string.Empty, StringComparison.OrdinalIgnoreCase);
         DateTime reset = limit.ResetsAt.ToLocalTime().DateTime;
         return $"{name} {limit.WindowLabel}: {FormatPercentage(limit.NormalizedUsedPercent)}% used · " +
-               $"{FormatPercentage(limit.RemainingPercent)}% left · {reset:d MMM HH:mm}";
+               $"{FormatPercentage(limit.RemainingPercent)}% left · next reset {reset:d MMM HH:mm} · " +
+               $"in {FormatResetCountdown(limit)}";
     }
 
     private static string FormatLogLimit(CodexRateLimitWindow limit) =>
