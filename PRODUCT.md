@@ -14,7 +14,7 @@ Codex Limit Reminder reads every rate-limit window exposed by the user's signed-
 
 ## Brand Personality
 
-Discreet, precise, reassuring. The app should feel like a dependable Windows instrument: quiet during normal work, direct when capacity becomes scarce, and free of decorative visual noise.
+Discreet, precise, futuristic. The app should feel like a dependable Windows instrument: quiet during normal work, direct when capacity becomes scarce, and technical without decorative visual noise.
 
 ## Anti-references
 

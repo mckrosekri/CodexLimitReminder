@@ -82,8 +82,8 @@ static CodexRateLimitWindow SparkFiveHour(double used = 0) => new(
 static void CollapsedWidgetRemainsCompact()
 {
     WidgetSize collapsed = WidgetLayout.GetLogicalSize(expanded: false, limitCount: 8);
-    Equal(320, collapsed.Width);
-    Equal(116, collapsed.Height);
+    Equal(260, collapsed.Width);
+    Equal(84, collapsed.Height);
 }
 
 static void ExpandedWidgetGrowsForLimits()
@@ -97,22 +97,22 @@ static void ExpandedWidgetGrowsForLimits()
 static void WidgetPlacementStaysInsideWorkArea()
 {
     var work = new WidgetRectangle(0, 0, 1920, 1040);
-    WidgetRectangle placed = WidgetLayout.PlaceSaved(5000, -200, new WidgetSize(320, 116), work);
-    Equal(1600, placed.Left);
+    WidgetRectangle placed = WidgetLayout.PlaceSaved(5000, -200, new WidgetSize(260, 84), work);
+    Equal(1660, placed.Left);
     Equal(0, placed.Top);
     Equal(1920, placed.Right);
-    Equal(116, placed.Bottom);
+    Equal(84, placed.Bottom);
 }
 
 static void WidgetResizeKeepsBottomRightAnchor()
 {
     var work = new WidgetRectangle(0, 0, 1920, 1040);
-    var current = new WidgetRectangle(1584, 908, 1904, 1024);
-    WidgetRectangle expanded = WidgetLayout.ResizeFromBottomRight(current, new WidgetSize(420, 288), work);
+    var current = new WidgetRectangle(1644, 940, 1904, 1024);
+    WidgetRectangle expanded = WidgetLayout.ResizeFromBottomRight(current, new WidgetSize(348, 216), work);
     Equal(1904, expanded.Right);
     Equal(1024, expanded.Bottom);
-    Equal(1484, expanded.Left);
-    Equal(736, expanded.Top);
+    Equal(1556, expanded.Left);
+    Equal(808, expanded.Top);
 }
 
 static void ParserReadsAllClocks()

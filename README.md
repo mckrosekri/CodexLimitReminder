@@ -2,9 +2,10 @@
 
 A tiny, private floating Windows app that monitors every usage-limit clock exposed by your signed-in Codex installation.
 
-- Small, semi-transparent, always-on-top limit card with no taskbar window.
+- Ultra-compact 260×84 dark telemetry card with restrained neon-cyan status accents.
+- Semi-transparent and always on top, with no taskbar window or focus stealing.
 - Collapsed view shows the main weekly allowance, remaining percentage, and current reset time.
-- Select **More** to expand every General and model-specific clock; select **Collapse** to return to the compact view.
+- Select **+** to expand every General and model-specific clock; select **−** to return to the compact view.
 - Drag the card anywhere on the desktop. Its position is remembered across restarts.
 - Full-screen, topmost alerts with a keyboard-accessible **Close reminder** button.
 - One daily summary at your chosen time, showing every live General and model-specific limit.
@@ -53,7 +54,7 @@ That is the only setup. The app launches Codex's local App Server without a cons
 
 ## Floating widget and tray controls
 
-- Select **More** or **Collapse** on the floating card to change its size.
+- Select **+** or **−** on the floating card to change its size.
 - Drag the card background to move it; right-click it for the tray menu.
 - Left-click the tray icon to show or hide the floating card.
 - Right-click for **Show/Hide floating limits**, **Settings**, **Refresh Codex status**, **Test daily limit summary**, or **Exit**.

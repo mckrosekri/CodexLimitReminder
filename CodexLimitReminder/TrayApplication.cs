@@ -33,6 +33,13 @@ internal sealed class TrayApplication : IDisposable
     private static readonly NativeMethods.WindowProc SettingsProcedure = SettingsWindowProcedure;
     private static readonly NativeMethods.WindowProc AlertProcedure = AlertWindowProcedure;
     private static readonly NativeMethods.WindowProc WidgetProcedure = WidgetWindowProcedure;
+    private static readonly uint WidgetBackgroundColor = Rgb(9, 18, 26);
+    private static readonly uint WidgetRaisedColor = Rgb(17, 34, 45);
+    private static readonly uint WidgetTextColor = Rgb(234, 251, 255);
+    private static readonly uint WidgetMutedColor = Rgb(156, 181, 191);
+    private static readonly uint WidgetAccentColor = Rgb(61, 230, 255);
+    private static readonly uint WidgetDangerColor = Rgb(255, 77, 141);
+    private static readonly uint WidgetTrackColor = Rgb(38, 57, 67);
     private static TrayApplication? Current;
 
     private readonly nint _instance;
@@ -192,7 +199,7 @@ internal sealed class TrayApplication : IDisposable
         RegisterWindowClass(
             NativeMethods.WidgetWindowClass,
             WidgetProcedure,
-            NativeMethods.GetSysColorBrush(NativeMethods.ColorWindow),
+            0,
             NativeMethods.CsHRedraw | NativeMethods.CsVRedraw | NativeMethods.CsDropShadow);
     }
 
@@ -390,7 +397,7 @@ internal sealed class TrayApplication : IDisposable
             0,
             0);
 
-        NativeMethods.SetLayeredWindowAttributes(_widgetWindow, 0, 242, NativeMethods.LwaAlpha);
+        NativeMethods.SetLayeredWindowAttributes(_widgetWindow, 0, 238, NativeMethods.LwaAlpha);
         ApplyWidgetShape();
     }
 
@@ -401,12 +408,12 @@ internal sealed class TrayApplication : IDisposable
 
         nint toggle = CreateControl(
             "BUTTON",
-            _widgetExpanded ? "Collapse" : "More",
-            NativeMethods.BsPushButton | NativeMethods.WsTabStop,
+            _widgetExpanded ? "Collapse limits" : "Expand limits",
+            NativeMethods.BsOwnerDraw | NativeMethods.WsTabStop,
             0,
             0,
-            74,
-            28,
+            30,
+            30,
             window,
             WidgetToggleControl,
             dpi);
@@ -425,9 +432,9 @@ internal sealed class TrayApplication : IDisposable
         DeleteFont(ref _widgetMetricFont);
         DeleteFont(ref _widgetTitleFont);
         uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
-        _widgetTitleFont = CreateSegoeFont(11, 600, dpi);
-        _widgetMetricFont = CreateSegoeFont(22, 600, dpi);
-        _widgetBodyFont = CreateSegoeFont(10, 400, dpi);
+        _widgetTitleFont = CreateUiFont(9, 600, dpi, "Bahnschrift");
+        _widgetMetricFont = CreateUiFont(20, 600, dpi, "Bahnschrift");
+        _widgetBodyFont = CreateUiFont(8, 400, dpi, "Bahnschrift");
         nint toggle = NativeMethods.GetDlgItem(_widgetWindow, WidgetToggleControl);
         if (toggle != 0)
         {
@@ -476,7 +483,8 @@ internal sealed class TrayApplication : IDisposable
         _widgetExpanded = expanded;
         NativeMethods.SetWindowText(
             NativeMethods.GetDlgItem(_widgetWindow, WidgetToggleControl),
-            _widgetExpanded ? "Collapse" : "More");
+            _widgetExpanded ? "Collapse limits" : "Expand limits");
+        NativeMethods.InvalidateRect(NativeMethods.GetDlgItem(_widgetWindow, WidgetToggleControl), 0, true);
         ResizeWidget();
         ActivityLog.Write($"Floating limit widget {(_widgetExpanded ? "expanded" : "collapsed")}.");
     }
@@ -521,16 +529,66 @@ internal sealed class TrayApplication : IDisposable
         }
 
         uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
-        int width = Scale(_widgetExpanded ? 78 : 58, dpi);
-        int height = Scale(28, dpi);
+        int width = Scale(30, dpi);
+        int height = Scale(30, dpi);
         NativeMethods.SetWindowPos(
             NativeMethods.GetDlgItem(_widgetWindow, WidgetToggleControl),
             0,
-            client.Right - width - Scale(12, dpi),
-            Scale(12, dpi),
+            client.Right - width - Scale(8, dpi),
+            Scale(8, dpi),
             width,
             height,
             NativeMethods.SwpNoActivate | NativeMethods.SwpNoZOrder);
+    }
+
+    private void PaintWidgetToggle(nint drawItemPointer)
+    {
+        if (drawItemPointer == 0)
+        {
+            return;
+        }
+
+        NativeMethods.DrawItemStruct item = Marshal.PtrToStructure<NativeMethods.DrawItemStruct>(drawItemPointer);
+        if (item.ControlId != WidgetToggleControl)
+        {
+            return;
+        }
+
+        bool pressed = (item.ItemState & NativeMethods.OdsSelected) != 0;
+        bool focused = (item.ItemState & NativeMethods.OdsFocus) != 0;
+        bool hovered = (item.ItemState & NativeMethods.OdsHotLight) != 0;
+        bool disabled = (item.ItemState & NativeMethods.OdsDisabled) != 0;
+        uint fillColor = pressed ? WidgetAccentColor : hovered ? WidgetTrackColor : WidgetRaisedColor;
+        uint borderColor = disabled ? WidgetMutedColor : focused ? WidgetTextColor : WidgetAccentColor;
+        uint textColor = disabled ? WidgetMutedColor : pressed ? WidgetBackgroundColor : WidgetAccentColor;
+
+        nint brush = NativeMethods.CreateSolidBrush(fillColor);
+        nint pen = NativeMethods.CreatePen(NativeMethods.PsSolid, 1, borderColor);
+        nint previousBrush = NativeMethods.SelectObject(item.DeviceContext, brush);
+        nint previousPen = NativeMethods.SelectObject(item.DeviceContext, pen);
+        NativeMethods.RoundRect(
+            item.DeviceContext,
+            item.ItemRectangle.Left,
+            item.ItemRectangle.Top,
+            item.ItemRectangle.Right,
+            item.ItemRectangle.Bottom,
+            8,
+            8);
+        nint previousFont = NativeMethods.SelectObject(item.DeviceContext, _widgetTitleFont);
+        NativeMethods.SetBkMode(item.DeviceContext, NativeMethods.Transparent);
+        NativeMethods.SetTextColor(item.DeviceContext, textColor);
+        NativeMethods.Rect glyph = item.ItemRectangle;
+        NativeMethods.DrawText(
+            item.DeviceContext,
+            _widgetExpanded ? "−" : "+",
+            -1,
+            ref glyph,
+            NativeMethods.DtCenter | NativeMethods.DtVCenter | NativeMethods.DtSingleLine | NativeMethods.DtNoPrefix);
+        NativeMethods.SelectObject(item.DeviceContext, previousFont);
+        NativeMethods.SelectObject(item.DeviceContext, previousPen);
+        NativeMethods.SelectObject(item.DeviceContext, previousBrush);
+        NativeMethods.DeleteObject(pen);
+        NativeMethods.DeleteObject(brush);
     }
 
     private void ApplyWidgetShape()
@@ -541,7 +599,7 @@ internal sealed class TrayApplication : IDisposable
         }
 
         uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(_widgetWindow));
-        int radius = Scale(12, dpi);
+        int radius = Scale(10, dpi);
         nint region = NativeMethods.CreateRoundRectRgn(0, 0, client.Width + 1, client.Height + 1, radius, radius);
         if (region != 0 && NativeMethods.SetWindowRgn(_widgetWindow, region, true) == 0)
         {
@@ -555,13 +613,14 @@ internal sealed class TrayApplication : IDisposable
         try
         {
             NativeMethods.GetClientRect(window, out NativeMethods.Rect client);
-            NativeMethods.FillRect(deviceContext, ref client, NativeMethods.GetSysColorBrush(NativeMethods.ColorWindow));
+            nint background = NativeMethods.CreateSolidBrush(WidgetBackgroundColor);
+            NativeMethods.FillRect(deviceContext, ref client, background);
+            NativeMethods.DeleteObject(background);
             NativeMethods.SetBkMode(deviceContext, NativeMethods.Transparent);
-            NativeMethods.SetTextColor(deviceContext, NativeMethods.GetSysColor(NativeMethods.ColorWindowText));
 
             uint dpi = Math.Max(96, NativeMethods.GetDpiForWindow(window));
-            int margin = Scale(16, dpi);
-            int buttonReserve = Scale(_widgetExpanded ? 104 : 84, dpi);
+            int margin = Scale(12, dpi);
+            int buttonReserve = Scale(48, dpi);
             nint previous = NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
 
             if (_widgetExpanded)
@@ -587,14 +646,15 @@ internal sealed class TrayApplication : IDisposable
         var label = new NativeMethods.Rect
         {
             Left = margin,
-            Top = Scale(10, dpi),
+            Top = Scale(4, dpi),
             Right = client.Right - buttonReserve,
-            Bottom = Scale(36, dpi)
+            Bottom = Scale(25, dpi)
         };
         NativeMethods.SelectObject(deviceContext, _widgetTitleFont);
+        NativeMethods.SetTextColor(deviceContext, WidgetMutedColor);
         NativeMethods.DrawText(
             deviceContext,
-            primary is null ? "Codex limits" : $"{ShortWidgetName(primary)} · {primary.WindowLabel}",
+            primary is null ? "Codex limits" : $"{ShortWidgetName(primary)} / {primary.WindowLabel}",
             -1,
             ref label,
             NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
@@ -602,11 +662,12 @@ internal sealed class TrayApplication : IDisposable
         var metric = new NativeMethods.Rect
         {
             Left = margin,
-            Top = Scale(36, dpi),
+            Top = Scale(23, dpi),
             Right = client.Right - margin,
-            Bottom = Scale(76, dpi)
+            Bottom = Scale(55, dpi)
         };
         NativeMethods.SelectObject(deviceContext, _widgetMetricFont);
+        NativeMethods.SetTextColor(deviceContext, WidgetTextColor);
         NativeMethods.DrawText(
             deviceContext,
             primary is null ? "Connecting…" : $"{FormatPercentage(primary.RemainingPercent)}% left",
@@ -617,21 +678,22 @@ internal sealed class TrayApplication : IDisposable
         var detail = new NativeMethods.Rect
         {
             Left = margin,
-            Top = Scale(76, dpi),
+            Top = Scale(54, dpi),
             Right = client.Right - margin,
-            Bottom = Scale(101, dpi)
+            Bottom = Scale(76, dpi)
         };
         NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+        NativeMethods.SetTextColor(deviceContext, WidgetMutedColor);
         NativeMethods.DrawText(
             deviceContext,
             primary is null
                 ? "Waiting for the signed-in Codex session"
-                : $"{FormatPercentage(primary.NormalizedUsedPercent)}% used · resets {FormatWidgetReset(primary)}",
+                : $"{FormatPercentage(primary.NormalizedUsedPercent)}% used · reset {FormatWidgetReset(primary)}",
             -1,
             ref detail,
             NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
 
-        PaintProgressBar(deviceContext, client, margin, client.Bottom - Scale(8, dpi), primary?.RemainingPercent ?? 0, dpi);
+        PaintProgressBar(deviceContext, client, margin, client.Bottom - Scale(4, dpi), primary?.RemainingPercent ?? 0, dpi);
     }
 
     private void PaintExpandedWidget(nint deviceContext, NativeMethods.Rect client, int margin, int buttonReserve, uint dpi)
@@ -639,11 +701,12 @@ internal sealed class TrayApplication : IDisposable
         var heading = new NativeMethods.Rect
         {
             Left = margin,
-            Top = Scale(10, dpi),
+            Top = Scale(5, dpi),
             Right = client.Right - buttonReserve,
-            Bottom = Scale(42, dpi)
+            Bottom = Scale(33, dpi)
         };
         NativeMethods.SelectObject(deviceContext, _widgetTitleFont);
+        NativeMethods.SetTextColor(deviceContext, WidgetTextColor);
         NativeMethods.DrawText(
             deviceContext,
             "Codex limits",
@@ -651,8 +714,8 @@ internal sealed class TrayApplication : IDisposable
             ref heading,
             NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtNoPrefix);
 
-        int rowsTop = Scale(48, dpi);
-        int footerHeight = Scale(30, dpi);
+        int rowsTop = Scale(38, dpi);
+        int footerHeight = Scale(22, dpi);
         int available = Math.Max(1, client.Bottom - footerHeight - rowsTop);
         int rowCount = Math.Max(1, _limits.Count);
         int rowHeight = available / rowCount;
@@ -667,6 +730,7 @@ internal sealed class TrayApplication : IDisposable
                 Bottom = client.Bottom - footerHeight
             };
             NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+            NativeMethods.SetTextColor(deviceContext, WidgetMutedColor);
             NativeMethods.DrawText(
                 deviceContext,
                 "Connecting to the signed-in Codex session…",
@@ -685,12 +749,13 @@ internal sealed class TrayApplication : IDisposable
                     Left = margin,
                     Top = top,
                     Right = client.Right - margin,
-                    Bottom = top + Scale(22, dpi)
+                    Bottom = top + Scale(18, dpi)
                 };
                 NativeMethods.SelectObject(deviceContext, _widgetTitleFont);
+                NativeMethods.SetTextColor(deviceContext, WidgetTextColor);
                 NativeMethods.DrawText(
                     deviceContext,
-                    $"{ShortWidgetName(limit)} · {limit.WindowLabel}",
+                    $"{ShortWidgetName(limit)} / {limit.WindowLabel}",
                     -1,
                     ref name,
                     NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
@@ -698,14 +763,15 @@ internal sealed class TrayApplication : IDisposable
                 var values = new NativeMethods.Rect
                 {
                     Left = margin,
-                    Top = top + Scale(21, dpi),
+                    Top = top + Scale(17, dpi),
                     Right = client.Right - margin,
-                    Bottom = top + Scale(46, dpi)
+                    Bottom = top + Scale(37, dpi)
                 };
                 NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+                NativeMethods.SetTextColor(deviceContext, WidgetMutedColor);
                 NativeMethods.DrawText(
                     deviceContext,
-                    $"{FormatPercentage(limit.NormalizedUsedPercent)}% used · {FormatPercentage(limit.RemainingPercent)}% left · resets {FormatWidgetReset(limit)}",
+                    $"{FormatPercentage(limit.NormalizedUsedPercent)}% used · {FormatPercentage(limit.RemainingPercent)}% left · reset {FormatWidgetReset(limit)}",
                     -1,
                     ref values,
                     NativeMethods.DtSingleLine | NativeMethods.DtVCenter | NativeMethods.DtEndEllipsis | NativeMethods.DtNoPrefix);
@@ -714,7 +780,7 @@ internal sealed class TrayApplication : IDisposable
                     deviceContext,
                     client,
                     margin,
-                    Math.Min(top + Scale(53, dpi), client.Bottom - footerHeight - Scale(5, dpi)),
+                    Math.Min(top + Scale(42, dpi), client.Bottom - footerHeight - Scale(4, dpi)),
                     limit.RemainingPercent,
                     dpi);
             }
@@ -728,9 +794,10 @@ internal sealed class TrayApplication : IDisposable
             Bottom = client.Bottom
         };
         string footerText = _lastSuccessfulRefresh is DateTime refreshed
-            ? $"Live · updated {refreshed:HH:mm} · checks every 15 min"
+            ? $"Live {refreshed:HH:mm} · auto 15 min"
             : "Refreshing automatically…";
         NativeMethods.SelectObject(deviceContext, _widgetBodyFont);
+        NativeMethods.SetTextColor(deviceContext, WidgetAccentColor);
         NativeMethods.DrawText(
             deviceContext,
             footerText,
@@ -747,7 +814,7 @@ internal sealed class TrayApplication : IDisposable
         double remainingPercent,
         uint dpi)
     {
-        int height = Math.Max(Scale(4, dpi), 2);
+        int height = Math.Max(Scale(3, dpi), 2);
         var track = new NativeMethods.Rect
         {
             Left = margin,
@@ -755,7 +822,9 @@ internal sealed class TrayApplication : IDisposable
             Right = client.Right - margin,
             Bottom = top + height
         };
-        NativeMethods.FillRect(deviceContext, ref track, NativeMethods.GetSysColorBrush(NativeMethods.ColorButtonFace));
+        nint trackBrush = NativeMethods.CreateSolidBrush(WidgetTrackColor);
+        NativeMethods.FillRect(deviceContext, ref track, trackBrush);
+        NativeMethods.DeleteObject(trackBrush);
         int fillWidth = (int)Math.Round(track.Width * Math.Clamp(remainingPercent, 0, 100) / 100.0);
         if (fillWidth <= 0)
         {
@@ -764,7 +833,10 @@ internal sealed class TrayApplication : IDisposable
 
         var fill = track;
         fill.Right = fill.Left + fillWidth;
-        NativeMethods.FillRect(deviceContext, ref fill, NativeMethods.GetSysColorBrush(NativeMethods.ColorHighlight));
+        uint accent = remainingPercent <= 25 ? WidgetDangerColor : WidgetAccentColor;
+        nint fillBrush = NativeMethods.CreateSolidBrush(accent);
+        NativeMethods.FillRect(deviceContext, ref fill, fillBrush);
+        NativeMethods.DeleteObject(fillBrush);
     }
 
     private CodexRateLimitWindow? SelectPrimaryLimit() =>
@@ -774,7 +846,7 @@ internal sealed class TrayApplication : IDisposable
 
     private static string ShortWidgetName(CodexRateLimitWindow limit) =>
         limit.LimitId.Equals("codex", StringComparison.OrdinalIgnoreCase)
-            ? "General Codex"
+            ? "General"
             : limit.DisplayName.Replace("GPT-5.3-Codex-", string.Empty, StringComparison.OrdinalIgnoreCase);
 
     private static string FormatWidgetReset(CodexRateLimitWindow limit)
@@ -785,7 +857,7 @@ internal sealed class TrayApplication : IDisposable
             ? $"today {reset:HH:mm}"
             : reset.Date == today.AddDays(1)
                 ? $"tomorrow {reset:HH:mm}"
-                : $"{reset:ddd d MMM · HH:mm}";
+                : $"{reset:d MMM HH:mm}";
     }
 
     private void SaveWidgetPlacement()
@@ -1626,6 +1698,9 @@ internal sealed class TrayApplication : IDisposable
             case NativeMethods.WmPaint:
                 app.PaintWidget(window);
                 return 0;
+            case NativeMethods.WmDrawItem:
+                app.PaintWidgetToggle(lParam);
+                return 1;
             case NativeMethods.WmEraseBackground:
                 return 1;
             case NativeMethods.WmCommand:
@@ -1767,7 +1842,10 @@ internal sealed class TrayApplication : IDisposable
 
     private static int Scale(int value, uint dpi) => NativeMethods.MulDiv(value, (int)dpi, 96);
 
-    private static nint CreateSegoeFont(int points, int weight, uint dpi) => NativeMethods.CreateFont(
+    private static nint CreateSegoeFont(int points, int weight, uint dpi) =>
+        CreateUiFont(points, weight, dpi, "Segoe UI");
+
+    private static nint CreateUiFont(int points, int weight, uint dpi, string faceName) => NativeMethods.CreateFont(
         -NativeMethods.MulDiv(points, (int)dpi, 72),
         0,
         0,
@@ -1781,7 +1859,10 @@ internal sealed class TrayApplication : IDisposable
         0,
         5,
         0,
-        "Segoe UI");
+        faceName);
+
+    private static uint Rgb(byte red, byte green, byte blue) =>
+        red | ((uint)green << 8) | ((uint)blue << 16);
 
     private static void ApplyFont(nint window, nint font) =>
         NativeMethods.SendMessage(window, NativeMethods.WmSetFont, (nuint)font, new nint(1));

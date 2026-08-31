@@ -18,6 +18,7 @@ internal static class NativeMethods
     internal const uint WmClose = 0x0010;
     internal const uint WmEraseBackground = 0x0014;
     internal const uint WmPaint = 0x000F;
+    internal const uint WmDrawItem = 0x002B;
     internal const uint WmDisplayChange = 0x007E;
     internal const uint WmNcHitTest = 0x0084;
     internal const uint WmCommand = 0x0111;
@@ -90,6 +91,7 @@ internal static class NativeMethods
     internal const uint BsPushButton = 0x00000000;
     internal const uint BsDefPushButton = 0x00000001;
     internal const uint BsAutoCheckBox = 0x00000003;
+    internal const uint BsOwnerDraw = 0x0000000B;
     internal const uint EsAutoHScroll = 0x0080;
     internal const uint CbsDropDownList = 0x0003;
     internal const uint SsLeft = 0x00000000;
@@ -109,6 +111,13 @@ internal static class NativeMethods
     internal const int ColorHighlight = 13;
     internal const int ColorButtonFace = 15;
     internal const int Transparent = 1;
+
+    internal const uint OdsSelected = 0x0001;
+    internal const uint OdsDisabled = 0x0004;
+    internal const uint OdsFocus = 0x0010;
+    internal const uint OdsHotLight = 0x0040;
+
+    internal const int PsSolid = 0;
 
     internal const uint DtCenter = 0x00000001;
     internal const uint DtVCenter = 0x00000004;
@@ -188,6 +197,20 @@ internal static class NativeMethods
         internal Rect Monitor;
         internal Rect Work;
         internal uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DrawItemStruct
+    {
+        internal uint ControlType;
+        internal uint ControlId;
+        internal uint ItemId;
+        internal uint ItemAction;
+        internal uint ItemState;
+        internal nint Window;
+        internal nint DeviceContext;
+        internal Rect ItemRectangle;
+        internal nuint ItemData;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -397,6 +420,23 @@ internal static class NativeMethods
 
     [DllImport("gdi32.dll")]
     internal static extern nint SelectObject(nint deviceContext, nint value);
+
+    [DllImport("gdi32.dll")]
+    internal static extern nint CreateSolidBrush(uint color);
+
+    [DllImport("gdi32.dll")]
+    internal static extern nint CreatePen(int style, int width, uint color);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RoundRect(
+        nint deviceContext,
+        int left,
+        int top,
+        int right,
+        int bottom,
+        int ellipseWidth,
+        int ellipseHeight);
 
     [DllImport("gdi32.dll")]
     internal static extern nint CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
